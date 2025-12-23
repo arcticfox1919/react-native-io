@@ -33,6 +33,7 @@
   ],
   "scripts": {
     "example": "yarn workspace react-native-io-example",
+    "codegen": "npx react-native codegen --path .",
     "clean": "del-cli android/build example/android/build example/android/app/build example/ios/build lib",
     "prepare": "bob build",
     "typecheck": "tsc",
@@ -110,11 +111,13 @@
     ]
   },
   "codegenConfig": {
-    "name": "IoSpec",
+    "name": "StdIOSpec",
     "type": "modules",
     "jsSrcsDir": "src",
+    "outputDir": "cpp/generated",
+    "includesGeneratedCode": true,
     "android": {
-      "javaPackageName": "com.io"
+      "javaPackageName": "xyz.bczl.io"
     }
   },
   "prettier": {

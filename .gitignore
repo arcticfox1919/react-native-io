@@ -84,3 +84,23 @@ android/generated
 
 # React Native Nitro Modules
 nitrogen/
+
+# Testing
+coverage/
+
+# TypeScript
+*.tsbuildinfo
+
+# Metro
+.metro-health
+metro-cache/
+
+# Android (Extra)
+*.apk
+*.aab
+*.ap_
+
+# iOS (Extra)
+*.lock
+*.mobileprovision
+
