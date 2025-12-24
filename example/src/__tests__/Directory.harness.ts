@@ -218,30 +218,4 @@ describe('Directory', () => {
       expect(entries[0]!.name).toBe('sync-file.txt');
     });
   });
-
-  describe('File creation helpers', () => {
-    it('should create child file using file() method', async () => {
-      const testDir = getTestDir();
-      const dir = fs.directory(testDir);
-      await dir.create();
-
-      const file = dir.file('child.txt');
-      expect(file.path).toBe(`${testDir}/child.txt`);
-
-      await file.writeString('Child content');
-      expect(await file.exists()).toBe(true);
-    });
-
-    it('should create child directory using directory() method', async () => {
-      const testDir = getTestDir();
-      const dir = fs.directory(testDir);
-      await dir.create();
-
-      const subDir = dir.directory('subdir');
-      expect(subDir.path).toBe(`${testDir}/subdir`);
-
-      await subDir.create();
-      expect(await subDir.exists()).toBe(true);
-    });
-  });
 });

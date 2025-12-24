@@ -171,6 +171,23 @@ public:
 };
 
 // ============================================================================
+// Promise Callbacks Container
+// ============================================================================
+
+/**
+ * @brief Container for Promise resolve/reject callbacks
+ *
+ * Holds both callbacks in a single allocation for async method execution.
+ * Must be used on the JS thread only.
+ */
+struct PromiseCallbacks {
+    Value resolve;
+    Value reject;
+    PromiseCallbacks(Runtime& rt, const Value& res, const Value& rej)
+        : resolve(rt, res), reject(rt, rej) {}
+};
+
+// ============================================================================
 // Concept: JSIHostObjectDerived
 // ============================================================================
 
@@ -282,6 +299,11 @@ protected:
     std::unordered_map<std::string, Property> properties_;
     std::shared_ptr<JSCallInvokerWrapper> callInvoker_;
     bool hasAsyncMethods_ = false;
+
+    // Cached JS objects (created lazily, invalidated on runtime change)
+    mutable std::unordered_map<std::string, std::shared_ptr<Object>> cachedFunctions_;
+    mutable std::shared_ptr<Object> cachedPromiseCtor_;
+    mutable Runtime* cachedRuntime_ = nullptr;
 
     // ========================================================================
     // Initialization
@@ -418,10 +440,22 @@ public:
     Value get(Runtime& rt, const PropNameID& name) override {
         auto propName = name.utf8(rt);
 
+        // Invalidate cache if runtime changed
+        if (cachedRuntime_ != &rt) {
+            cachedFunctions_.clear();
+            cachedPromiseCtor_.reset();
+            cachedRuntime_ = &rt;
+        }
+
+        // Check if we have a cached function for this method
+        if (auto cacheIt = cachedFunctions_.find(propName); cacheIt != cachedFunctions_.end()) {
+            return Value(rt, *cacheIt->second);
+        }
+
         // Sync method lookup
         if (auto it = syncMethods_.find(propName); it != syncMethods_.end()) {
             const auto& method = it->second;
-            return Function::createFromHostFunction(
+            auto func = Function::createFromHostFunction(
                 rt,
                 PropNameID::forUtf8(rt, propName),
                 method.paramCount,
@@ -433,6 +467,10 @@ public:
                     }
                 }
             );
+            // Cache the function
+            auto cached = std::make_shared<Object>(std::move(func));
+            cachedFunctions_[propName] = cached;
+            return Value(rt, *cached);
         }
 
         // Async method lookup
@@ -446,17 +484,22 @@ public:
                 executor = static_cast<Derived*>(this)->getTaskExecutor();
             }
 
-            return Function::createFromHostFunction(
+            auto func = Function::createFromHostFunction(
                 rt,
                 PropNameID::forUtf8(rt, propName),
                 method.paramCount,
-                [handler = method.handler, invoker, executor](
+                [handler = method.handler, invoker, executor, this](
                     Runtime& runtime, const Value&, const Value* args, size_t count
                 ) -> Value {
                     // Extract args on JS thread (safe)
                     auto [strings, numbers, bools, buffers] = extractArgs(runtime, args, count);
 
-                    auto promiseConstructor = runtime.global().getPropertyAsFunction(runtime, "Promise");
+                    // Get cached Promise constructor
+                    if (!cachedPromiseCtor_) {
+                        cachedPromiseCtor_ = std::make_shared<Object>(
+                            runtime.global().getPropertyAsFunction(runtime, "Promise")
+                        );
+                    }
 
                     auto promiseExecutor = Function::createFromHostFunction(
                         runtime,
@@ -469,11 +512,11 @@ public:
                          buffers = std::move(buffers)](
                             Runtime& rt, const Value&, const Value* promiseArgs, size_t
                         ) mutable -> Value {
-                            auto resolve = std::make_shared<Value>(rt, promiseArgs[0]);
-                            auto reject = std::make_shared<Value>(rt, promiseArgs[1]);
+                            // Use single allocation for both callbacks
+                            auto callbacks = std::make_shared<PromiseCallbacks>(rt, promiseArgs[0], promiseArgs[1]);
 
                             // Execute handler on worker thread
-                            executor->execute([handler, invoker, resolve, reject,
+                            executor->execute([handler, invoker, callbacks,
                                                strings = std::move(strings),
                                                numbers = std::move(numbers),
                                                bools = std::move(bools),
@@ -483,15 +526,15 @@ public:
                                     AsyncResult result = handler(strings, numbers, bools, buffers);
 
                                     // Return to JS thread to create JS values and resolve
-                                    invoker->invokeAsync([resolve, result = std::move(result)](Runtime& rt) {
+                                    invoker->invokeAsync([callbacks, result = std::move(result)](Runtime& rt) mutable {
                                         Value jsValue = result.toJSValue(rt);
-                                        resolve->asObject(rt).asFunction(rt).call(rt, std::move(jsValue));
+                                        callbacks->resolve.asObject(rt).asFunction(rt).call(rt, std::move(jsValue));
                                     });
                                 } catch (const std::exception& e) {
                                     std::string errorMsg = e.what();
                                     // Return to JS thread to reject
-                                    invoker->invokeAsync([reject, errorMsg](Runtime& rt) {
-                                        reject->asObject(rt).asFunction(rt).call(
+                                    invoker->invokeAsync([callbacks, errorMsg = std::move(errorMsg)](Runtime& rt) {
+                                        callbacks->reject.asObject(rt).asFunction(rt).call(
                                             rt, String::createFromUtf8(rt, errorMsg)
                                         );
                                     });
@@ -502,9 +545,13 @@ public:
                         }
                     );
 
-                    return promiseConstructor.callAsConstructor(runtime, promiseExecutor);
+                    return cachedPromiseCtor_->asFunction(runtime).callAsConstructor(runtime, promiseExecutor);
                 }
             );
+            // Cache the function
+            auto cached = std::make_shared<Object>(std::move(func));
+            cachedFunctions_[propName] = cached;
+            return Value(rt, *cached);
         }
 
         // Property lookup

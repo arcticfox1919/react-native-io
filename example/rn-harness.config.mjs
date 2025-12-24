@@ -1,6 +1,6 @@
 import {
   androidPlatform,
-  physicalAndroidDevice,
+  androidEmulator,
 } from '@react-native-harness/platform-android';
 import {
   applePlatform,
@@ -15,15 +15,13 @@ const config = {
   runners: [
     androidPlatform({
       name: 'android',
-      // Note: physicalAndroidDevice converts to lowercase internally,
-      // but adb returns original case, causing mismatch. Use lowercase here.
-      device: physicalAndroidDevice('xiaomi', '2312draabc'),
+      device: androidEmulator('Pixel_6_API_35'),
       bundleId: 'io.example',
     }),
     applePlatform({
       name: 'ios',
-      device: appleSimulator('iPhone 16 Pro', '18.0'),
-      bundleId: 'org.reactjs.native.example.IoExample',
+      device: appleSimulator('iPhone 16 Pro', '18.5'),
+      bundleId: 'io.example.rct',
     }),
   ],
 };

@@ -2,6 +2,11 @@ import { TurboModuleRegistry, type TurboModule } from 'react-native';
 import type { IOFileSystem, IORequest, IOPlatform } from './types';
 
 /**
+ * String encoding types supported by native layer
+ */
+export type StringEncoding = 'utf8' | 'ascii' | 'latin1';
+
+/**
  * @internal TurboModule Spec (not exported)
  */
 interface Spec extends TurboModule {
@@ -9,6 +14,9 @@ interface Spec extends TurboModule {
   createIORequest(): Object;
   createPlatform(): Object;
   installHttpClient(): void;
+  // String encoding/decoding (Object is used because Codegen doesn't support ArrayBuffer)
+  decodeString(buffer: Object, encoding: string): string;
+  encodeString(str: string, encoding: string): Object;
 }
 
 const NativeModule = TurboModuleRegistry.getEnforcing<Spec>('NativeStdIO');
@@ -57,4 +65,47 @@ export function createPlatform(): IOPlatform {
  */
 export function installHttpClient(): void {
   NativeModule.installHttpClient();
+}
+
+/**
+ * Decode binary data to string using native implementation.
+ * Much faster than JavaScript implementation for large buffers.
+ *
+ * @param buffer Binary data to decode
+ * @param encoding String encoding (default: 'utf8')
+ * @returns Decoded string
+ *
+ * @example
+ * ```typescript
+ * const buffer = new ArrayBuffer(5);
+ * const view = new Uint8Array(buffer);
+ * view.set([72, 101, 108, 108, 111]); // "Hello"
+ * const str = decodeString(buffer); // "Hello"
+ * ```
+ */
+export function decodeString(
+  buffer: ArrayBuffer,
+  encoding: StringEncoding = 'utf8'
+): string {
+  return NativeModule.decodeString(buffer as Object, encoding);
+}
+
+/**
+ * Encode string to binary data using native implementation.
+ *
+ * @param str String to encode
+ * @param encoding String encoding (default: 'utf8')
+ * @returns Encoded binary data
+ *
+ * @example
+ * ```typescript
+ * const buffer = encodeString("Hello");
+ * const view = new Uint8Array(buffer); // [72, 101, 108, 108, 111]
+ * ```
+ */
+export function encodeString(
+  str: string,
+  encoding: StringEncoding = 'utf8'
+): ArrayBuffer {
+  return NativeModule.encodeString(str, encoding) as ArrayBuffer;
 }

@@ -6,7 +6,6 @@
  * **Async methods are recommended** to avoid blocking the JS thread.
  */
 
-import { File } from './File';
 import {
   EntityType,
   type DirectoryEntry,
@@ -368,22 +367,6 @@ export class Directory {
   // ==========================================================================
   // Child Access
   // ==========================================================================
-
-  /**
-   * Get a file in this directory (shares the same IOFileSystem)
-   * @param name File name
-   */
-  file(name: string): File {
-    return new File(this.fs().joinPaths(this._path, name), this.fs());
-  }
-
-  /**
-   * Get a subdirectory (shares the same IOFileSystem)
-   * @param name Subdirectory name
-   */
-  directory(name: string): Directory {
-    return new Directory(this.fs().joinPaths(this._path, name), this.fs());
-  }
 
   /**
    * Get child path

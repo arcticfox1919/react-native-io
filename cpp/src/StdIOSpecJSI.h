@@ -26,6 +26,8 @@ protected:
     methodMap_["createIORequest"] = MethodMetadata {.argCount = 0, .invoker = __createIORequest};
     methodMap_["createPlatform"] = MethodMetadata {.argCount = 0, .invoker = __createPlatform};
     methodMap_["installHttpClient"] = MethodMetadata {.argCount = 0, .invoker = __installHttpClient};
+    methodMap_["decodeString"] = MethodMetadata {.argCount = 2, .invoker = __decodeString};
+    methodMap_["encodeString"] = MethodMetadata {.argCount = 2, .invoker = __encodeString};
   }
   
 private:
@@ -56,6 +58,24 @@ private:
       bridging::getParameterCount(&T::installHttpClient) == 1,
       "Expected installHttpClient(...) to have 1 parameters");
     bridging::callFromJs<void>(rt, &T::installHttpClient,  static_cast<NativeStdIOCxxSpec*>(&turboModule)->jsInvoker_, static_cast<T*>(&turboModule));return jsi::Value::undefined();
+  }
+
+  static jsi::Value __decodeString(jsi::Runtime &rt, TurboModule &turboModule, const jsi::Value* args, size_t count) {
+    static_assert(
+      bridging::getParameterCount(&T::decodeString) == 3,
+      "Expected decodeString(...) to have 3 parameters");
+    return bridging::callFromJs<jsi::String>(rt, &T::decodeString,  static_cast<NativeStdIOCxxSpec*>(&turboModule)->jsInvoker_, static_cast<T*>(&turboModule),
+      count <= 0 ? throw jsi::JSError(rt, "Expected argument in position 0 to be passed") : args[0].asObject(rt),
+      count <= 1 ? throw jsi::JSError(rt, "Expected argument in position 1 to be passed") : args[1].asString(rt));
+  }
+
+  static jsi::Value __encodeString(jsi::Runtime &rt, TurboModule &turboModule, const jsi::Value* args, size_t count) {
+    static_assert(
+      bridging::getParameterCount(&T::encodeString) == 3,
+      "Expected encodeString(...) to have 3 parameters");
+    return bridging::callFromJs<jsi::Object>(rt, &T::encodeString,  static_cast<NativeStdIOCxxSpec*>(&turboModule)->jsInvoker_, static_cast<T*>(&turboModule),
+      count <= 0 ? throw jsi::JSError(rt, "Expected argument in position 0 to be passed") : args[0].asString(rt),
+      count <= 1 ? throw jsi::JSError(rt, "Expected argument in position 1 to be passed") : args[1].asString(rt));
   }
 };
 

@@ -26,7 +26,7 @@
  * ```
  */
 
-import { createRequest, installHttpClient } from './NativeStdIO';
+import { createRequest, installHttpClient, decodeString } from './NativeStdIO';
 import type { IORequest } from './types';
 
 // Track if HTTP client has been installed (Android only)
@@ -205,60 +205,6 @@ function arrayToHeaders(
   return headers;
 }
 
-/**
- * Decode UTF-8 ArrayBuffer to string without TextDecoder (for Hermes compatibility)
- */
-function decodeUTF8(buffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(buffer);
-  let result = '';
-  let i = 0;
-
-  while (i < bytes.length) {
-    const byte1 = bytes[i]!;
-
-    if (byte1 < 0x80) {
-      // 1-byte character (ASCII)
-      result += String.fromCharCode(byte1);
-      i++;
-    } else if ((byte1 & 0xe0) === 0xc0) {
-      // 2-byte character
-      const byte2 = bytes[i + 1]!;
-      result += String.fromCharCode(((byte1 & 0x1f) << 6) | (byte2 & 0x3f));
-      i += 2;
-    } else if ((byte1 & 0xf0) === 0xe0) {
-      // 3-byte character
-      const byte2 = bytes[i + 1]!;
-      const byte3 = bytes[i + 2]!;
-      result += String.fromCharCode(
-        ((byte1 & 0x0f) << 12) | ((byte2 & 0x3f) << 6) | (byte3 & 0x3f)
-      );
-      i += 3;
-    } else if ((byte1 & 0xf8) === 0xf0) {
-      // 4-byte character (surrogate pair)
-      const byte2 = bytes[i + 1]!;
-      const byte3 = bytes[i + 2]!;
-      const byte4 = bytes[i + 3]!;
-      const codePoint =
-        ((byte1 & 0x07) << 18) |
-        ((byte2 & 0x3f) << 12) |
-        ((byte3 & 0x3f) << 6) |
-        (byte4 & 0x3f);
-      // Convert to surrogate pair
-      const adjusted = codePoint - 0x10000;
-      result += String.fromCharCode(
-        0xd800 + (adjusted >> 10),
-        0xdc00 + (adjusted & 0x3ff)
-      );
-      i += 4;
-    } else {
-      // Invalid UTF-8, skip
-      i++;
-    }
-  }
-
-  return result;
-}
-
 function createResponse(native: NativeResponse): Response {
   const bodyBuffer = native.body;
   let bodyText: string | null = null;
@@ -273,7 +219,8 @@ function createResponse(native: NativeResponse): Response {
 
     text(): string {
       if (bodyText === null) {
-        bodyText = decodeUTF8(bodyBuffer);
+        // Use native UTF-8 decoding for better performance
+        bodyText = decodeString(bodyBuffer, 'utf8');
       }
       return bodyText;
     },

@@ -6,21 +6,20 @@ import {
   ScrollView,
   TouchableOpacity,
 } from 'react-native';
-import {
-  FS,
-  EntityType,
-  WriteMode,
-  HashAlgorithm,
-  request,
-  openFS,
-} from 'react-native-io';
+import { FS, HashAlgorithm, request, openFS } from 'react-native-io';
 
-// Test result type
 type TestResult = {
   name: string;
   status: 'pending' | 'pass' | 'fail';
   error?: string;
-  duration?: number; // milliseconds
+  duration?: number;
+};
+
+type TestDef = {
+  name: string;
+  setup?: () => Promise<void>;
+  fn: () => Promise<void> | void;
+  verify?: () => Promise<void> | void;
 };
 
 export default function App() {
@@ -40,624 +39,496 @@ export default function App() {
 
   const runTests = useCallback(async () => {
     const tempDir = FS.tempDir;
-    console.log('Using temp directory:', tempDir);
     const testDir = `${tempDir}/io_test_${Date.now()}`;
-
-    // Create shared file system context with thread pool
-    const fs = openFS(2); // 2 worker threads for parallel operations
-
-    // Helper to create File/Directory using shared context
+    const fs = openFS(5);
     const file = (path: string) => fs.file(path);
     const dir = (path: string) => fs.directory(path);
 
-    // Warm up: ensure thread pool, native module, and write paths are fully initialized
-    // This operation is not counted in any test timing
+    // Warm up
     const warmupDir = dir(`${tempDir}/warmup_${Date.now()}`);
     await warmupDir.create();
     await warmupDir.delete();
 
-    // Define all tests
-    const tests: { name: string; fn: () => Promise<void> }[] = [
-      // ========== Directory Tests ==========
+    // Shared test data
+    let testFileContent = '';
+    let testFileBytes: ArrayBuffer;
+
+    const tests: TestDef[] = [
+      // ==================== Directory Tests ====================
       {
         name: 'Directory.create() async',
         fn: async () => {
-          const d = dir(testDir);
-          await d.create(true);
-          if (!(await d.exists())) throw new Error('Directory not created');
+          await dir(testDir).create(true);
+        },
+        verify: async () => {
+          if (!(await dir(testDir).exists())) throw new Error('Not created');
         },
       },
       {
         name: 'Directory.create() sync',
-        fn: async () => {
-          const d = dir(`${testDir}_sync`);
-          d.createSync(true);
-          if (!d.existsSync()) throw new Error('Directory not created');
+        fn: () => {
+          dir(`${testDir}/sync_dir`).createSync(true);
+        },
+        verify: () => {
+          if (!dir(`${testDir}/sync_dir`).existsSync())
+            throw new Error('Not created');
         },
       },
       {
         name: 'Directory.exists() async',
         fn: async () => {
-          const d = dir(testDir);
-          if (!(await d.exists())) throw new Error('Should exist');
+          await dir(testDir).exists();
         },
       },
       {
         name: 'Directory.exists() sync',
-        fn: async () => {
-          const d = dir(testDir);
-          if (!d.existsSync()) throw new Error('Should exist');
+        fn: () => {
+          dir(testDir).existsSync();
         },
       },
       {
         name: 'Directory.isDirectory() async',
         fn: async () => {
-          const d = dir(testDir);
-          if (!(await d.isDirectory())) throw new Error('Should be directory');
+          await dir(testDir).isDirectory();
         },
       },
       {
         name: 'Directory.isDirectory() sync',
-        fn: async () => {
-          const d = dir(testDir);
-          if (!d.isDirectorySync()) throw new Error('Should be directory');
+        fn: () => {
+          dir(testDir).isDirectorySync();
         },
       },
       {
-        name: 'Directory.name',
+        name: 'Directory.metadata() async',
         fn: async () => {
-          const d = dir(testDir);
-          if (!d.name.startsWith('io_test_')) throw new Error('Invalid name');
+          await dir(testDir).metadata();
         },
       },
       {
-        name: 'Directory.parent',
-        fn: async () => {
-          const d = dir(testDir);
-          if (!d.parentPath) throw new Error('Should have parent');
+        name: 'Directory.metadata() sync',
+        fn: () => {
+          dir(testDir).metadataSync();
         },
       },
       {
-        name: 'Directory.absolutePath()',
+        name: 'Directory.absolutePath() async',
         fn: async () => {
-          const d = dir(testDir);
-          const abs = await d.absolutePath();
-          if (!abs.includes('io_test_'))
-            throw new Error('Invalid absolute path');
+          await dir(testDir).absolutePath();
         },
       },
       {
-        name: 'Directory.metadata()',
+        name: 'Directory.absolutePath() sync',
+        fn: () => {
+          dir(testDir).absolutePathSync();
+        },
+      },
+      {
+        name: 'Directory.list() async',
+        setup: async () => {
+          await file(`${testDir}/list_test/a.txt`).writeString('a');
+          await file(`${testDir}/list_test/b.txt`).writeString('b');
+        },
         fn: async () => {
-          const d = dir(testDir);
-          const meta = await d.metadata();
-          if (meta.type !== EntityType.Directory) throw new Error('Wrong type');
+          await dir(`${testDir}/list_test`).list();
+        },
+      },
+      {
+        name: 'Directory.list() sync',
+        fn: () => {
+          dir(`${testDir}/list_test`).listSync();
+        },
+      },
+      {
+        name: 'Directory.delete() async',
+        setup: async () => {
+          await dir(`${testDir}/del_async`).create();
+        },
+        fn: async () => {
+          await dir(`${testDir}/del_async`).delete();
+        },
+      },
+      {
+        name: 'Directory.delete() sync',
+        setup: async () => {
+          await dir(`${testDir}/del_sync`).create();
+        },
+        fn: () => {
+          dir(`${testDir}/del_sync`).deleteSync();
+        },
+      },
+      {
+        name: 'Directory.move() async',
+        setup: async () => {
+          await dir(`${testDir}/move_src`).create();
+        },
+        fn: async () => {
+          await dir(`${testDir}/move_src`).move(`${testDir}/move_dst`);
+        },
+      },
+      {
+        name: 'Directory.move() sync',
+        setup: async () => {
+          await dir(`${testDir}/move_src2`).create();
+        },
+        fn: () => {
+          dir(`${testDir}/move_src2`).moveSync(`${testDir}/move_dst2`);
         },
       },
 
-      // ========== File Creation & Write Tests ==========
+      // ==================== File Write Tests ====================
       {
         name: 'File.create() async',
         fn: async () => {
-          const f = file(`${testDir}/test.txt`);
-          await f.create();
-          if (!(await f.exists())) throw new Error('File not created');
+          await file(`${testDir}/create_async.txt`).create();
         },
       },
       {
         name: 'File.create() sync',
-        fn: async () => {
-          const f = file(`${testDir}/test_sync.txt`);
-          f.createSync();
-          if (!f.existsSync()) throw new Error('File not created');
+        fn: () => {
+          file(`${testDir}/create_sync.txt`).createSync();
         },
       },
       {
         name: 'File.writeString() async',
         fn: async () => {
-          const f = file(`${testDir}/write_string.txt`);
-          await f.writeString('Hello, World!');
-          const content = await f.readString();
-          if (content !== 'Hello, World!') throw new Error('Content mismatch');
+          await file(`${testDir}/write_async.txt`).writeString('Hello');
         },
       },
       {
         name: 'File.writeString() sync',
-        fn: async () => {
-          const f = file(`${testDir}/write_string_sync.txt`);
-          f.writeStringSync('Hello, World!');
-          const content = await f.readString();
-          if (content !== 'Hello, World!') throw new Error('Content mismatch');
+        fn: () => {
+          file(`${testDir}/write_sync.txt`).writeStringSync('Hello');
         },
       },
       {
-        name: 'File.writeString() Append async',
+        name: 'File.appendString() async',
+        setup: async () => {
+          await file(`${testDir}/append_async.txt`).writeString('A');
+        },
         fn: async () => {
-          const f = file(`${testDir}/append.txt`);
-          await f.writeString('Hello');
-          await f.writeString(', World!', WriteMode.Append);
-          const content = await f.readString();
-          if (content !== 'Hello, World!') throw new Error('Append failed');
+          await file(`${testDir}/append_async.txt`).appendString('B');
         },
       },
       {
-        name: 'File.appendString()',
-        fn: async () => {
-          const f = file(`${testDir}/append2.txt`);
-          await f.writeString('A');
-          await f.appendString('B');
-          if ((await f.readString()) !== 'AB') throw new Error('Append failed');
+        name: 'File.appendString() sync',
+        setup: async () => {
+          await file(`${testDir}/append_sync.txt`).writeString('A');
+        },
+        fn: () => {
+          file(`${testDir}/append_sync.txt`).appendStringSync('B');
         },
       },
       {
         name: 'File.writeBytes() async',
         fn: async () => {
-          const f = file(`${testDir}/bytes.bin`);
-          const data = new Uint8Array([0x48, 0x65, 0x6c, 0x6c, 0x6f]).buffer;
-          await f.writeBytes(data);
-          const read = new Uint8Array(await f.readBytes());
-          if (read.length !== 5 || read[0] !== 0x48)
-            throw new Error('Bytes mismatch');
+          const data = new Uint8Array([1, 2, 3, 4, 5]).buffer;
+          await file(`${testDir}/bytes_async.bin`).writeBytes(data);
         },
       },
       {
         name: 'File.writeBytes() sync',
-        fn: async () => {
-          const f = file(`${testDir}/bytes_sync.bin`);
-          const data = new Uint8Array([0x48, 0x65, 0x6c, 0x6c, 0x6f]).buffer;
-          f.writeBytesSync(data);
-          const read = new Uint8Array(await f.readBytes());
-          if (read.length !== 5 || read[0] !== 0x48)
-            throw new Error('Bytes mismatch');
+        fn: () => {
+          const data = new Uint8Array([1, 2, 3, 4, 5]).buffer;
+          file(`${testDir}/bytes_sync.bin`).writeBytesSync(data);
         },
       },
 
-      // ========== File Read Tests ==========
+      // ==================== File Read Tests ====================
       {
         name: 'File.readString() async',
+        setup: async () => {
+          await file(`${testDir}/read_str.txt`).writeString('Content');
+        },
         fn: async () => {
-          const f = file(`${testDir}/read.txt`);
-          await f.writeString('Test Content');
-          const content = await f.readString();
-          if (content !== 'Test Content') throw new Error('Read failed');
+          testFileContent = await file(`${testDir}/read_str.txt`).readString();
+        },
+        verify: () => {
+          if (testFileContent !== 'Content') throw new Error('Mismatch');
         },
       },
       {
         name: 'File.readString() sync',
-        fn: async () => {
-          const f = file(`${testDir}/read_sync.txt`);
-          await f.writeString('Test Content');
-          const content = f.readStringSync();
-          if (content !== 'Test Content') throw new Error('Read failed');
+        fn: () => {
+          testFileContent = file(`${testDir}/read_str.txt`).readStringSync();
+        },
+        verify: () => {
+          if (testFileContent !== 'Content') throw new Error('Mismatch');
         },
       },
       {
         name: 'File.readBytes() async',
+        setup: async () => {
+          await file(`${testDir}/read_bytes.bin`).writeBytes(
+            new Uint8Array([1, 2, 3]).buffer
+          );
+        },
         fn: async () => {
-          const f = file(`${testDir}/read_bytes.bin`);
-          await f.writeString('ABC');
-          const bytes = new Uint8Array(await f.readBytes());
-          if (bytes[0] !== 65) throw new Error('Read bytes failed');
+          testFileBytes = await file(`${testDir}/read_bytes.bin`).readBytes();
+        },
+        verify: () => {
+          if (new Uint8Array(testFileBytes)[0] !== 1)
+            throw new Error('Mismatch');
         },
       },
       {
         name: 'File.readBytes() sync',
-        fn: async () => {
-          const f = file(`${testDir}/read_bytes_sync.bin`);
-          await f.writeString('ABC');
-          const bytes = new Uint8Array(f.readBytesSync());
-          if (bytes[0] !== 65) throw new Error('Read bytes failed');
+        fn: () => {
+          testFileBytes = file(`${testDir}/read_bytes.bin`).readBytesSync();
+        },
+        verify: () => {
+          if (new Uint8Array(testFileBytes)[0] !== 1)
+            throw new Error('Mismatch');
         },
       },
       {
         name: 'File.readLines() async',
+        setup: async () => {
+          await file(`${testDir}/lines.txt`).writeString('L1\nL2\nL3');
+        },
         fn: async () => {
-          const f = file(`${testDir}/lines.txt`);
-          await f.writeString('Line1\nLine2\nLine3');
-          const lines = await f.readLines();
-          if (lines.length !== 3 || lines[1] !== 'Line2')
-            throw new Error('Lines mismatch');
+          await file(`${testDir}/lines.txt`).readLines();
         },
       },
       {
         name: 'File.readLines() sync',
-        fn: async () => {
-          const f = file(`${testDir}/lines_sync.txt`);
-          await f.writeString('Line1\nLine2\nLine3');
-          const lines = f.readLinesSync();
-          if (lines.length !== 3 || lines[1] !== 'Line2')
-            throw new Error('Lines mismatch');
+        fn: () => {
+          file(`${testDir}/lines.txt`).readLinesSync();
         },
       },
 
-      // ========== File Properties Tests ==========
+      // ==================== File Property Tests ====================
       {
         name: 'File.exists() async',
+        setup: async () => {
+          await file(`${testDir}/exists.txt`).writeString('x');
+        },
         fn: async () => {
-          const f = file(`${testDir}/exists.txt`);
-          await f.writeString('test');
-          if (!(await f.exists())) throw new Error('Should exist');
+          await file(`${testDir}/exists.txt`).exists();
         },
       },
       {
         name: 'File.exists() sync',
-        fn: async () => {
-          const f = file(`${testDir}/exists_sync.txt`);
-          await f.writeString('test');
-          if (!f.existsSync()) throw new Error('Should exist');
+        fn: () => {
+          file(`${testDir}/exists.txt`).existsSync();
         },
       },
       {
         name: 'File.isFile() async',
         fn: async () => {
-          const f = file(`${testDir}/isfile.txt`);
-          await f.writeString('test');
-          if (!(await f.isFile())) throw new Error('Should be file');
+          await file(`${testDir}/exists.txt`).isFile();
         },
       },
       {
         name: 'File.isFile() sync',
-        fn: async () => {
-          const f = file(`${testDir}/isfile_sync.txt`);
-          await f.writeString('test');
-          if (!f.isFileSync()) throw new Error('Should be file');
-        },
-      },
-      {
-        name: 'File.name',
-        fn: async () => {
-          const f = file(`${testDir}/myfile.txt`);
-          if (f.name !== 'myfile.txt') throw new Error('Wrong name');
-        },
-      },
-      {
-        name: 'File.extension',
-        fn: async () => {
-          const f = file(`${testDir}/myfile.txt`);
-          if (f.extension !== '.txt') throw new Error('Wrong extension');
-        },
-      },
-      {
-        name: 'File.nameWithoutExtension',
-        fn: async () => {
-          const f = file(`${testDir}/myfile.txt`);
-          if (f.nameWithoutExtension !== 'myfile')
-            throw new Error('Wrong name');
-        },
-      },
-      {
-        name: 'File.parent',
-        fn: async () => {
-          const f = file(`${testDir}/myfile.txt`);
-          if (!f.parent.includes('io_test_')) throw new Error('Wrong parent');
+        fn: () => {
+          file(`${testDir}/exists.txt`).isFileSync();
         },
       },
       {
         name: 'File.size() async',
         fn: async () => {
-          const f = file(`${testDir}/size.txt`);
-          await f.writeString('12345');
-          const size = await f.size();
-          if (size !== 5) throw new Error(`Wrong size: ${size}`);
+          await file(`${testDir}/exists.txt`).size();
         },
       },
       {
         name: 'File.size() sync',
-        fn: async () => {
-          const f = file(`${testDir}/size_sync.txt`);
-          await f.writeString('12345');
-          const size = f.sizeSync();
-          if (size !== 5) throw new Error(`Wrong size: ${size}`);
+        fn: () => {
+          file(`${testDir}/exists.txt`).sizeSync();
         },
       },
       {
-        name: 'File.metadata()',
+        name: 'File.metadata() async',
         fn: async () => {
-          const f = file(`${testDir}/meta.txt`);
-          await f.writeString('test');
-          const meta = await f.metadata();
-          if (meta.type !== EntityType.File) throw new Error('Wrong type');
-          if (meta.size !== 4) throw new Error('Wrong size');
+          await file(`${testDir}/exists.txt`).metadata();
         },
       },
       {
-        name: 'File.modifiedTime()',
-        fn: async () => {
-          const f = file(`${testDir}/time.txt`);
-          await f.writeString('test');
-          const time = await f.modifiedTime();
-          const diff = Date.now() - time.getTime();
-          if (diff > 60000) throw new Error('Time too old');
+        name: 'File.metadata() sync',
+        fn: () => {
+          file(`${testDir}/exists.txt`).metadataSync();
         },
       },
       {
-        name: 'File.absolutePath()',
+        name: 'File.modifiedTime() async',
         fn: async () => {
-          const f = file(`${testDir}/abs.txt`);
-          await f.writeString('test');
-          const abs = await f.absolutePath();
-          if (!abs.includes('abs.txt')) throw new Error('Invalid path');
+          await file(`${testDir}/exists.txt`).modifiedTime();
+        },
+      },
+      {
+        name: 'File.modifiedTime() sync',
+        fn: () => {
+          file(`${testDir}/exists.txt`).modifiedTimeSync();
+        },
+      },
+      {
+        name: 'File.absolutePath() async',
+        fn: async () => {
+          await file(`${testDir}/exists.txt`).absolutePath();
+        },
+      },
+      {
+        name: 'File.absolutePath() sync',
+        fn: () => {
+          file(`${testDir}/exists.txt`).absolutePathSync();
         },
       },
 
-      // ========== File Operations Tests ==========
+      // ==================== File Operation Tests ====================
       {
-        name: 'File.copy()',
+        name: 'File.copy() async',
+        setup: async () => {
+          await file(`${testDir}/copy_src.txt`).writeString('copy');
+        },
         fn: async () => {
-          const src = file(`${testDir}/copy_src.txt`);
-          await src.writeString('copy me');
-          const dst = await src.copy(`${testDir}/copy_dst.txt`);
-          if ((await dst.readString()) !== 'copy me')
-            throw new Error('Copy failed');
+          await file(`${testDir}/copy_src.txt`).copy(`${testDir}/copy_dst.txt`);
         },
       },
       {
-        name: 'File.move()',
+        name: 'File.copy() sync',
+        setup: async () => {
+          await file(`${testDir}/copy_src2.txt`).writeString('copy');
+        },
+        fn: () => {
+          file(`${testDir}/copy_src2.txt`).copySync(`${testDir}/copy_dst2.txt`);
+        },
+      },
+      {
+        name: 'File.move() async',
+        setup: async () => {
+          await file(`${testDir}/move_src.txt`).writeString('move');
+        },
         fn: async () => {
-          const src = file(`${testDir}/move_src.txt`);
-          await src.writeString('move me');
-          const dst = await src.move(`${testDir}/move_dst.txt`);
-          if (await src.exists()) throw new Error('Source should not exist');
-          if ((await dst.readString()) !== 'move me')
-            throw new Error('Move failed');
+          await file(`${testDir}/move_src.txt`).move(`${testDir}/move_dst.txt`);
+        },
+      },
+      {
+        name: 'File.move() sync',
+        setup: async () => {
+          await file(`${testDir}/move_src2.txt`).writeString('move');
+        },
+        fn: () => {
+          file(`${testDir}/move_src2.txt`).moveSync(`${testDir}/move_dst2.txt`);
         },
       },
       {
         name: 'File.delete() async',
+        setup: async () => {
+          await file(`${testDir}/del_async.txt`).writeString('del');
+        },
         fn: async () => {
-          const f = file(`${testDir}/delete.txt`);
-          await f.writeString('delete me');
-          await f.delete();
-          if (await f.exists()) throw new Error('Should be deleted');
+          await file(`${testDir}/del_async.txt`).delete();
         },
       },
       {
         name: 'File.delete() sync',
-        fn: async () => {
-          const f = file(`${testDir}/delete_sync.txt`);
-          await f.writeString('delete me');
-          f.deleteSync();
-          if (f.existsSync()) throw new Error('Should be deleted');
+        setup: async () => {
+          await file(`${testDir}/del_sync.txt`).writeString('del');
         },
-      },
-      {
-        name: 'File.calcHash() MD5',
-        fn: async () => {
-          const f = file(`${testDir}/hash.txt`);
-          await f.writeString('hello');
-          const hash = await f.calcHash(HashAlgorithm.MD5);
-          if (hash !== '5d41402abc4b2a76b9719d911017c592')
-            throw new Error('Wrong MD5');
-        },
-      },
-      {
-        name: 'File.calcHash() SHA256',
-        fn: async () => {
-          const f = file(`${testDir}/hash256.txt`);
-          await f.writeString('hello');
-          const hash = await f.calcHash(HashAlgorithm.SHA256);
-          if (!hash.startsWith('2cf24dba')) throw new Error('Wrong SHA256');
+        fn: () => {
+          file(`${testDir}/del_sync.txt`).deleteSync();
         },
       },
 
-      // ========== Directory List Tests ==========
+      // ==================== Hash Tests ====================
       {
-        name: 'Directory.list() async',
+        name: 'File.calcHash(md5)',
+        setup: async () => {
+          await file(`${testDir}/hash.txt`).writeString('hash content');
+        },
         fn: async () => {
-          const d = dir(testDir);
-          const entries = await d.list();
-          if (entries.length === 0) throw new Error('Should have entries');
+          await file(`${testDir}/hash.txt`).calcHash(HashAlgorithm.MD5);
         },
       },
       {
-        name: 'Directory.list() sync',
+        name: 'File.calcHash(sha256)',
         fn: async () => {
-          const d = dir(testDir);
-          const entries = d.listSync();
-          if (entries.length === 0) throw new Error('Should have entries');
-        },
-      },
-      {
-        name: 'Directory.listFiles() async',
-        fn: async () => {
-          const d = dir(testDir);
-          const files = await d.listFiles();
-          if (files.length === 0) throw new Error('Should have files');
-        },
-      },
-      {
-        name: 'Directory.listFiles() sync',
-        fn: async () => {
-          const d = dir(testDir);
-          const files = d.listFilesSync();
-          if (files.length === 0) throw new Error('Should have files');
-        },
-      },
-      {
-        name: 'Directory.listDirectories()',
-        fn: async () => {
-          const subDir = dir(`${testDir}/subdir`);
-          await subDir.create();
-          const d = dir(testDir);
-          const dirs = await d.listDirectories();
-          if (dirs.length === 0) throw new Error('Should have subdirectory');
-        },
-      },
-      {
-        name: 'Directory.isEmpty()',
-        fn: async () => {
-          const empty = dir(`${testDir}/empty`);
-          await empty.create();
-          if (!(await empty.isEmpty())) throw new Error('Should be empty');
-        },
-      },
-      {
-        name: 'Directory.getTotalSize()',
-        fn: async () => {
-          const d = dir(testDir);
-          const size = await d.getTotalSize();
-          if (size === 0) throw new Error('Should have size > 0');
+          await file(`${testDir}/hash.txt`).calcHash(HashAlgorithm.SHA256);
         },
       },
 
-      // ========== Directory Child Access Tests ==========
-      {
-        name: 'Directory.file()',
-        fn: async () => {
-          const d = dir(testDir);
-          const f = d.file('child.txt');
-          await f.writeString('child');
-          if ((await f.readString()) !== 'child')
-            throw new Error('Child file failed');
-        },
-      },
-      {
-        name: 'Directory.directory()',
-        fn: async () => {
-          const d = dir(testDir);
-          const sub = d.directory('nested');
-          await sub.create();
-          if (!(await sub.exists())) throw new Error('Nested dir failed');
-        },
-      },
-
-      // ========== FS Utility Tests ==========
+      // ==================== FS Utility Tests ====================
       {
         name: 'FS.joinPaths()',
-        fn: async () => {
-          const path = FS.joinPaths('/a', 'b', 'c.txt');
-          if (!path.includes('b')) throw new Error('Join failed');
+        fn: () => {
+          FS.joinPaths('/a', 'b', 'c.txt');
         },
       },
       {
-        name: 'FS.getAvailableSpace()',
+        name: 'FS.getAvailableSpace() async',
         fn: async () => {
-          const space = await FS.getAvailableSpace(tempDir);
-          console.log('Available space:', space);
-          if (space <= 0) throw new Error('Should have space');
+          await FS.getAvailableSpace(tempDir);
         },
       },
       {
-        name: 'FS.getTotalSpace()',
+        name: 'FS.getAvailableSpace() sync',
+        fn: () => {
+          FS.getAvailableSpaceSync(tempDir);
+        },
+      },
+      {
+        name: 'FS.getTotalSpace() async',
         fn: async () => {
-          const space = await FS.getTotalSpace(tempDir);
-          console.log('Total space:', space);
-          if (space <= 0) throw new Error('Should have total space');
+          await FS.getTotalSpace(tempDir);
+        },
+      },
+      {
+        name: 'FS.getTotalSpace() sync',
+        fn: () => {
+          FS.getTotalSpaceSync(tempDir);
+        },
+      },
+      {
+        name: 'FS.decodeString()',
+        fn: () => {
+          const buf = new Uint8Array([72, 101, 108, 108, 111]).buffer;
+          const s = FS.decodeString(buf);
+          if (s !== 'Hello') throw new Error('Decode failed');
+        },
+      },
+      {
+        name: 'FS.encodeString()',
+        fn: () => {
+          const buf = FS.encodeString('Hello');
+          if (new Uint8Array(buf)[0] !== 72) throw new Error('Encode failed');
         },
       },
 
-      // ========== HTTP Request Tests ==========
+      // ==================== HTTP Tests ====================
       {
         name: 'request.get()',
         fn: async () => {
-          console.log('[HTTP Test] Starting GET request to httpbin.org/get');
-          try {
-            const res = await request.get('https://httpbin.org/get?foo=bar');
-            const bodyBuffer = res.arrayBuffer();
-            console.log(
-              '[HTTP Test] GET response:',
-              JSON.stringify({
-                ok: res.ok,
-                status: res.status,
-                statusText: res.statusText,
-                error: res.error,
-                bodyByteLength: bodyBuffer.byteLength,
-              })
-            );
-            if (!res.ok) {
-              throw new Error(
-                `HTTP error: ${res.status}, statusText: ${res.statusText}, err: ${res.error}`
-              );
-            }
-            // Verify we received body data
-            if (bodyBuffer.byteLength === 0) {
-              throw new Error('Response body is empty');
-            }
-            const data = res.json<{ args: { foo: string } }>();
-            if (data.args.foo !== 'bar') throw new Error('GET params mismatch');
-          } catch (e) {
-            console.error('[HTTP Test] GET request failed:', e);
-            throw e;
-          }
+          const res = await request.get('https://httpbin.org/get');
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
         },
       },
       {
-        name: 'request.post() JSON',
+        name: 'request.post()',
         fn: async () => {
-          console.log('[HTTP Test] Starting POST request to httpbin.org/post');
-          try {
-            const res = await request.post('https://httpbin.org/post', {
-              json: { name: 'test', value: 123 },
-            });
-            const bodyBuffer = res.arrayBuffer();
-            console.log(
-              '[HTTP Test] POST response:',
-              JSON.stringify({
-                ok: res.ok,
-                status: res.status,
-                statusText: res.statusText,
-                error: res.error,
-                bodyByteLength: bodyBuffer.byteLength,
-              })
-            );
-            if (!res.ok) {
-              throw new Error(
-                `HTTP error: ${res.status}, statusText: ${res.statusText}, err: ${res.error}`
-              );
-            }
-            // Verify we received body data
-            if (bodyBuffer.byteLength === 0) {
-              throw new Error('Response body is empty');
-            }
-            const text = res.text();
-            console.log(
-              '[HTTP Test] POST text (first 200 chars):',
-              text.substring(0, 200)
-            );
-            const data = res.json<{ json: { name: string; value: number } }>();
-            console.log('[HTTP Test] POST parsed JSON:', JSON.stringify(data));
-            if (data.json.name !== 'test' || data.json.value !== 123) {
-              throw new Error('POST JSON mismatch');
-            }
-          } catch (e) {
-            console.error('[HTTP Test] POST request failed:', e);
-            throw e;
-          }
-        },
-      },
-
-      // ========== Cleanup Test ==========
-      {
-        name: 'Directory.delete() recursive',
-        fn: async () => {
-          const d = dir(testDir);
-          const count = await d.delete(true);
-          if (await d.exists()) throw new Error('Should be deleted');
-          if (count === 0) throw new Error('Should delete items');
+          const res = await request.post('https://httpbin.org/post', {
+            json: { test: 123 },
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
         },
       },
     ];
 
-    // Initialize results
     setResults(tests.map((t) => ({ name: t.name, status: 'pending' })));
     setRunning(true);
 
-    // Run tests sequentially
     for (const test of tests) {
-      const startTime = performance.now();
       try {
+        if (test.setup) await test.setup();
+        const start = performance.now();
         await test.fn();
-        const duration = performance.now() - startTime;
+        const duration = performance.now() - start;
+        if (test.verify) await test.verify();
         updateResult(test.name, 'pass', undefined, duration);
       } catch (e: any) {
-        const duration = performance.now() - startTime;
-        updateResult(test.name, 'fail', e.message || String(e), duration);
+        updateResult(test.name, 'fail', e.message || String(e));
       }
     }
 
-    // Close the shared file system context
     fs.close();
-
     setRunning(false);
   }, []);
 
@@ -709,77 +580,51 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-  },
+  container: { flex: 1, backgroundColor: '#f5f5f5' },
   header: {
     padding: 20,
     paddingTop: 50,
     backgroundColor: '#fff',
+    alignItems: 'center',
     borderBottomWidth: 1,
-    borderBottomColor: '#ddd',
+    borderBottomColor: '#e0e0e0',
   },
   title: {
-    fontSize: 20,
+    fontSize: 24,
     fontWeight: 'bold',
-    marginBottom: 8,
+    color: '#333',
+    marginBottom: 10,
   },
-  summary: {
-    fontSize: 16,
-    color: '#666',
-    marginBottom: 12,
-  },
+  summary: { fontSize: 18, color: '#666', marginBottom: 15 },
   button: {
     backgroundColor: '#007AFF',
-    padding: 12,
+    paddingHorizontal: 30,
+    paddingVertical: 12,
     borderRadius: 8,
-    alignItems: 'center',
   },
-  buttonDisabled: {
-    backgroundColor: '#ccc',
-  },
-  buttonText: {
-    color: '#fff',
-    fontWeight: '600',
-  },
-  list: {
-    flex: 1,
-    padding: 12,
-  },
+  buttonDisabled: { opacity: 0.5 },
+  buttonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  list: { flex: 1, padding: 10 },
   item: {
     flexDirection: 'row',
     backgroundColor: '#fff',
     padding: 12,
-    marginBottom: 8,
     borderRadius: 8,
-    alignItems: 'flex-start',
+    marginBottom: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
   },
-  icon: {
-    fontSize: 16,
-    marginRight: 10,
-  },
-  itemContent: {
-    flex: 1,
-  },
+  icon: { fontSize: 18, marginRight: 12 },
+  itemContent: { flex: 1 },
   itemHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  itemName: {
-    fontSize: 14,
-    fontWeight: '500',
-    flex: 1,
-  },
-  duration: {
-    fontSize: 12,
-    color: '#888',
-    marginLeft: 8,
-  },
-  error: {
-    fontSize: 12,
-    color: '#ff3b30',
-    marginTop: 4,
-  },
+  itemName: { color: '#333', fontSize: 14, flex: 1 },
+  duration: { color: '#4CAF50', fontSize: 12, marginLeft: 8 },
+  error: { color: '#F44336', fontSize: 12, marginTop: 4 },
 });

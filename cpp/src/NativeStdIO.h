@@ -16,6 +16,10 @@ public:
 
   void installHttpClient(jsi::Runtime &rt);
 
+  // String encoding/decoding
+  jsi::String decodeString(jsi::Runtime &rt, jsi::Object buffer, jsi::String encoding);
+  jsi::Object encodeString(jsi::Runtime &rt, jsi::String str, jsi::String encoding);
+
   static constexpr const char* kModuleName = "NativeStdIO";
 };
 

@@ -55,6 +55,7 @@ export {
   type IOPlatformAndroid,
   type IOPlatformIOS,
 } from './types';
+export type { StringEncoding } from './NativeStdIO';
 
 // Export classes
 export { File } from './File';
@@ -77,7 +78,13 @@ export {
 } from './Request';
 
 // Re-export IO utilities from native module
-import { createFileSystem, createPlatform } from './NativeStdIO';
+import {
+  createFileSystem,
+  createPlatform,
+  decodeString,
+  encodeString,
+  type StringEncoding,
+} from './NativeStdIO';
 import type { IOPlatform, IOPlatformAndroid, IOPlatformIOS } from './types';
 import { IOPlatformType } from './types';
 
@@ -281,5 +288,51 @@ export const FS = {
    */
   getTotalSpaceSync: (path: string): number => {
     return _getFs().getTotalSpaceSync(path);
+  },
+
+  // ==========================================================================
+  // String Encoding/Decoding
+  // ==========================================================================
+
+  /**
+   * Decode binary data to string using native implementation.
+   * Much faster than JavaScript implementation for large buffers.
+   *
+   * @param buffer Binary data to decode
+   * @param encoding String encoding (default: 'utf8')
+   * @returns Decoded string
+   *
+   * @example
+   * ```typescript
+   * const buffer = new ArrayBuffer(5);
+   * new Uint8Array(buffer).set([72, 101, 108, 108, 111]); // "Hello"
+   * const str = FS.decodeString(buffer); // "Hello"
+   * ```
+   */
+  decodeString: (
+    buffer: ArrayBuffer,
+    encoding: StringEncoding = 'utf8'
+  ): string => {
+    return decodeString(buffer, encoding);
+  },
+
+  /**
+   * Encode string to binary data using native implementation.
+   *
+   * @param str String to encode
+   * @param encoding String encoding (default: 'utf8')
+   * @returns Encoded binary data
+   *
+   * @example
+   * ```typescript
+   * const buffer = FS.encodeString("Hello");
+   * new Uint8Array(buffer); // [72, 101, 108, 108, 111]
+   * ```
+   */
+  encodeString: (
+    str: string,
+    encoding: StringEncoding = 'utf8'
+  ): ArrayBuffer => {
+    return encodeString(str, encoding);
   },
 };
