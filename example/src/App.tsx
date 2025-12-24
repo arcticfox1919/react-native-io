@@ -6,7 +6,14 @@ import {
   ScrollView,
   TouchableOpacity,
 } from 'react-native';
-import { FS, HashAlgorithm, request, openFS } from 'react-native-io';
+import {
+  FS,
+  HashAlgorithm,
+  request,
+  openFS,
+  FileOpenMode,
+  SeekOrigin,
+} from 'react-native-io';
 
 type TestResult = {
   name: string;
@@ -443,6 +450,204 @@ export default function App() {
         name: 'File.calcHash(sha256)',
         fn: async () => {
           await file(`${testDir}/hash.txt`).calcHash(HashAlgorithm.SHA256);
+        },
+      },
+
+      // ==================== File Handle Tests ====================
+      {
+        name: 'FileHandle.open() + close()',
+        fn: () => {
+          const handle = fs.open(`${testDir}/hash.txt`, FileOpenMode.Read);
+          handle.close();
+        },
+      },
+      {
+        name: 'FileHandle.readString()',
+        fn: async () => {
+          const handle = fs.open(`${testDir}/hash.txt`, FileOpenMode.Read);
+          const content = await handle.readString();
+          handle.close();
+          if (content !== 'hash content')
+            throw new Error(`Unexpected: ${content}`);
+        },
+      },
+      {
+        name: 'FileHandle.writeString()',
+        setup: async () => {
+          await file(`${testDir}/handle_write.txt`).writeString('');
+        },
+        fn: async () => {
+          const handle = fs.open(
+            `${testDir}/handle_write.txt`,
+            FileOpenMode.Write
+          );
+          const written = await handle.writeString('Hello Handle');
+          handle.close();
+          if (written !== 12) throw new Error(`Written: ${written}`);
+        },
+        verify: async () => {
+          const content = await file(
+            `${testDir}/handle_write.txt`
+          ).readString();
+          if (content !== 'Hello Handle')
+            throw new Error(`Verify failed: ${content}`);
+        },
+      },
+      {
+        name: 'FileHandle.readLine()',
+        setup: async () => {
+          await file(`${testDir}/lines.txt`).writeString('line1\nline2\nline3');
+        },
+        fn: async () => {
+          const handle = fs.open(`${testDir}/lines.txt`, FileOpenMode.Read);
+          const line1 = await handle.readLine();
+          const line2 = await handle.readLine();
+          handle.close();
+          if (line1 !== 'line1') throw new Error(`Line1: ${line1}`);
+          if (line2 !== 'line2') throw new Error(`Line2: ${line2}`);
+        },
+      },
+      {
+        name: 'FileHandle.writeLine()',
+        fn: async () => {
+          const handle = fs.open(
+            `${testDir}/writelines.txt`,
+            FileOpenMode.Write
+          );
+          await handle.writeLine('first');
+          await handle.writeLine('second');
+          handle.close();
+        },
+        verify: async () => {
+          const content = await file(`${testDir}/writelines.txt`).readString();
+          if (content !== 'first\nsecond\n')
+            throw new Error(`Content: ${content}`);
+        },
+      },
+      {
+        name: 'FileHandle.seek() + getPosition()',
+        fn: async () => {
+          const handle = fs.open(`${testDir}/lines.txt`, FileOpenMode.Read);
+          await handle.seek(6, SeekOrigin.Begin);
+          const pos = await handle.getPosition();
+          const line = await handle.readLine();
+          handle.close();
+          if (pos !== 6) throw new Error(`Position: ${pos}`);
+          if (line !== 'line2') throw new Error(`Line: ${line}`);
+        },
+      },
+      {
+        name: 'FileHandle.rewind()',
+        fn: async () => {
+          const handle = fs.open(`${testDir}/lines.txt`, FileOpenMode.Read);
+          await handle.readLine();
+          await handle.rewind();
+          const line = await handle.readLine();
+          handle.close();
+          if (line !== 'line1') throw new Error(`Line after rewind: ${line}`);
+        },
+      },
+      {
+        name: 'FileHandle.getSize()',
+        fn: async () => {
+          const handle = fs.open(`${testDir}/hash.txt`, FileOpenMode.Read);
+          const size = await handle.getSize();
+          handle.close();
+          if (size !== 12) throw new Error(`Size: ${size}`);
+        },
+      },
+      {
+        name: 'FileHandle.isEOF()',
+        fn: async () => {
+          const handle = fs.open(`${testDir}/hash.txt`, FileOpenMode.Read);
+          if (await handle.isEOF()) throw new Error('EOF at start');
+          await handle.readString();
+          if (!(await handle.isEOF()))
+            throw new Error('Not EOF after read all');
+          handle.close();
+        },
+      },
+      {
+        name: 'FileHandle.read() binary',
+        fn: async () => {
+          const handle = fs.open(`${testDir}/hash.txt`, FileOpenMode.Read);
+          const buf = await handle.read(4);
+          handle.close();
+          if (buf.byteLength !== 4)
+            throw new Error(`Length: ${buf.byteLength}`);
+          const str = FS.decodeString(buf);
+          if (str !== 'hash') throw new Error(`Decoded: ${str}`);
+        },
+      },
+      {
+        name: 'FileHandle.write() binary',
+        fn: async () => {
+          const handle = fs.open(
+            `${testDir}/binary_handle.dat`,
+            FileOpenMode.Write
+          );
+          const data = new Uint8Array([0x48, 0x49]).buffer;
+          const written = await handle.write(data);
+          handle.close();
+          if (written !== 2) throw new Error(`Written: ${written}`);
+        },
+        verify: async () => {
+          const bytes = await file(`${testDir}/binary_handle.dat`).readBytes();
+          const arr = new Uint8Array(bytes);
+          if (arr[0] !== 0x48 || arr[1] !== 0x49)
+            throw new Error('Binary verify failed');
+        },
+      },
+      {
+        name: 'FileHandle.flush()',
+        fn: async () => {
+          const handle = fs.open(
+            `${testDir}/flush_test.txt`,
+            FileOpenMode.Write
+          );
+          await handle.writeString('flush');
+          await handle.flush();
+          handle.close();
+        },
+      },
+      {
+        name: 'FileHandle.truncate()',
+        setup: async () => {
+          await file(`${testDir}/truncate.txt`).writeString('Hello World');
+        },
+        fn: async () => {
+          const handle = fs.open(
+            `${testDir}/truncate.txt`,
+            FileOpenMode.ReadWrite
+          );
+          await handle.seek(5, SeekOrigin.Begin);
+          await handle.truncate();
+          handle.close();
+        },
+        verify: async () => {
+          const content = await file(`${testDir}/truncate.txt`).readString();
+          if (content !== 'Hello')
+            throw new Error(`After truncate: ${content}`);
+        },
+      },
+      {
+        name: 'FileHandle append mode',
+        setup: async () => {
+          await file(`${testDir}/append_handle.txt`).writeString('Start');
+        },
+        fn: async () => {
+          const handle = fs.open(
+            `${testDir}/append_handle.txt`,
+            FileOpenMode.Append
+          );
+          await handle.writeString('End');
+          handle.close();
+        },
+        verify: async () => {
+          const content = await file(
+            `${testDir}/append_handle.txt`
+          ).readString();
+          if (content !== 'StartEnd') throw new Error(`Content: ${content}`);
         },
       },
 

@@ -8,8 +8,10 @@
 
 import { File } from './File';
 import { Directory } from './Directory';
+import { FileHandle } from './FileHandle';
 import { createFileSystem } from './NativeStdIO';
 import type { IOFileSystem } from './types';
+import { FileOpenMode } from './types';
 
 /**
  * File system context for batch file operations.
@@ -97,6 +99,34 @@ export class FSContext {
    */
   directory(path: string): Directory {
     return new Directory(path, this.fs);
+  }
+
+  /**
+   * Open a file and return a handle for streaming operations.
+   *
+   * File handles allow multiple read/write operations without reopening
+   * the file each time. Remember to close the handle when done.
+   *
+   * @param path File path
+   * @param mode Open mode (default: Read)
+   * @returns FileHandle instance
+   *
+   * @example
+   * ```typescript
+   * const fs = openFS();
+   * const handle = fs.open('/path/to/file.txt', FileOpenMode.Read);
+   *
+   * // Read line by line
+   * while (!handle.isEOF()) {
+   *   const line = await handle.readLine();
+   *   console.log(line);
+   * }
+   *
+   * handle.close();
+   * ```
+   */
+  open(path: string, mode: FileOpenMode = FileOpenMode.Read): FileHandle {
+    return new FileHandle(this.fs, path, mode);
   }
 
   /**

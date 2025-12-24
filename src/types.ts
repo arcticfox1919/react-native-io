@@ -71,9 +71,47 @@ export enum HashAlgorithm {
   CRC32 = 11,
 }
 
+/**
+ * File open mode for FileHandle
+ */
+export enum FileOpenMode {
+  /** Read only - file must exist */
+  Read = 0,
+  /** Write only - truncate/create */
+  Write = 1,
+  /** Append only - create if not exist */
+  Append = 2,
+  /** Read/Write - file must exist */
+  ReadWrite = 3,
+  /** Write/Read - truncate/create */
+  WriteRead = 4,
+  /** Append/Read - create if not exist */
+  AppendRead = 5,
+}
+
+/**
+ * Seek origin for FileHandle position operations
+ */
+export enum SeekOrigin {
+  /** Seek from beginning of file */
+  Begin = 0,
+  /** Seek from current position */
+  Current = 1,
+  /** Seek from end of file */
+  End = 2,
+}
+
 // ============================================================================
 // Data Types
 // ============================================================================
+
+/**
+ * File handle ID type
+ *
+ * Represents an open file handle returned by openFile().
+ * Use with file* methods to perform streaming operations.
+ */
+export type FileHandleId = number;
 
 /**
  * File or directory metadata
@@ -112,6 +150,81 @@ export interface DirectoryEntry {
  * Methods without 'Sync' suffix return Promises and run on a thread pool.
  */
 export interface IOFileSystem {
+  // ========================================================================
+  // File Handle Operations (Streaming I/O)
+  // ========================================================================
+
+  /**
+   * Open file and return handle ID for streaming operations
+   * @param path File path
+   * @param mode Open mode (default: Read)
+   * @returns Handle ID (number) for subsequent operations
+   *
+   * @example
+   * ```typescript
+   * // Read file line by line
+   * const handle = fs.openFile('/path/to/file', FileOpenMode.Read);
+   * while (!fs.fileIsEOF(handle)) {
+   *   const line = await fs.fileReadLine(handle);
+   *   console.log(line);
+   * }
+   * fs.fileClose(handle);
+   *
+   * // Write to file with multiple operations
+   * const out = fs.openFile('/path/to/output', FileOpenMode.Write);
+   * await fs.fileWriteString(out, 'Header\n');
+   * await fs.fileWriteString(out, 'Body\n');
+   * fs.fileClose(out);
+   * ```
+   */
+  openFile(path: string, mode?: FileOpenMode): FileHandleId;
+
+  /** Close file handle */
+  fileClose(handle: FileHandleId): void;
+
+  /** Seek to position */
+  fileSeek(
+    handle: FileHandleId,
+    offset: number,
+    origin?: SeekOrigin
+  ): Promise<number>;
+
+  /** Rewind to beginning */
+  fileRewind(handle: FileHandleId): Promise<void>;
+
+  /** Get current position */
+  fileGetPosition(handle: FileHandleId): Promise<number>;
+
+  /** Get file size */
+  fileGetSize(handle: FileHandleId): Promise<number>;
+
+  /** Check if at end of file */
+  fileIsEOF(handle: FileHandleId): Promise<boolean>;
+
+  /** Flush buffer to disk */
+  fileFlush(handle: FileHandleId): Promise<void>;
+
+  /** Truncate file at current position (async - I/O operation) */
+  fileTruncate(handle: FileHandleId): Promise<void>;
+
+  /** Read bytes (async - I/O bound) */
+  fileRead(handle: FileHandleId, size?: number): Promise<ArrayBuffer>;
+
+  /** Read as string (async) */
+  fileReadString(handle: FileHandleId, size?: number): Promise<string>;
+
+  /** Read single line (async) */
+  fileReadLine(handle: FileHandleId): Promise<string>;
+
+  /** Write bytes (async) */
+  fileWrite(handle: FileHandleId, data: ArrayBuffer): Promise<number>;
+
+  /** Write string (async) */
+  fileWriteString(handle: FileHandleId, content: string): Promise<number>;
+
+  /** Write line with newline (async) */
+  fileWriteLine(handle: FileHandleId, line: string): Promise<number>;
+
   // ========================================================================
   // Query Operations
   // ========================================================================

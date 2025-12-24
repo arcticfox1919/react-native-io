@@ -47,6 +47,9 @@ export {
   EntityType,
   WriteMode,
   HashAlgorithm,
+  FileOpenMode,
+  SeekOrigin,
+  type FileHandleId,
   type FileMetadata,
   type DirectoryEntry,
   type IOFileSystem,
@@ -60,6 +63,7 @@ export type { StringEncoding } from './NativeStdIO';
 // Export classes
 export { File } from './File';
 export { Directory } from './Directory';
+export { FileHandle } from './FileHandle';
 export { FSContext, openFS } from './FSContext';
 
 // Export HTTP Request API

@@ -31,7 +31,10 @@
 #include "BS_thread_pool.hpp"
 #include "JSIHostObjectBase.hpp"
 #include "IOFileSystem.hpp"
+#include "IOFileHandle.hpp"
 #include <ReactCommon/CallInvoker.h>
+#include <mutex>
+#include <atomic>
 
 namespace rct_io {
 
@@ -96,6 +99,40 @@ private:
     std::shared_ptr<JSCallInvokerWrapper> invoker_;
     std::unique_ptr<TaskExecutor> executor_;
 
+    // File handle management (use shared_ptr to avoid dangling pointers in async ops)
+    std::unordered_map<int, std::shared_ptr<IOFileHandle>> fileHandles_;
+    std::mutex handlesMutex_;
+    std::atomic<int> nextHandleId_{1};
+
+    /**
+     * @brief Get file handle by ID (thread-safe)
+     * @returns shared_ptr to handle (safe for async operations)
+     * @throws std::runtime_error if handle is invalid
+     */
+    std::shared_ptr<IOFileHandle> getHandle(int handleId) {
+        std::lock_guard<std::mutex> lock(handlesMutex_);
+        auto it = fileHandles_.find(handleId);
+        if (it == fileHandles_.end()) {
+            throw std::runtime_error("Invalid file handle: " + std::to_string(handleId));
+        }
+        return it->second;  // Return shared_ptr, increases ref count
+    }
+
+    /**
+     * @brief Remove handle from map (does not close file)
+     * @returns shared_ptr to removed handle, or nullptr if not found
+     */
+    std::shared_ptr<IOFileHandle> removeHandle(int handleId) {
+        std::lock_guard<std::mutex> lock(handlesMutex_);
+        auto it = fileHandles_.find(handleId);
+        if (it == fileHandles_.end()) {
+            return nullptr;
+        }
+        auto handle = std::move(it->second);
+        fileHandles_.erase(it);
+        return handle;
+    }
+
 public:
     /**
      * @brief Construct FSHostObject with React Native's CallInvoker
@@ -143,7 +180,78 @@ private:
     // ========================================================================
     void initMethods() {
         // ====================================================================
-        // Synchronous Methods
+        // File Handle Operations (Synchronous - quick operations)
+        // ====================================================================
+
+        // openFile(path, mode?) -> handle (number)
+        // mode: 0='r', 1='w', 2='a', 3='r+', 4='w+', 5='a+'
+        JSI_SYNC_METHOD(openFile, 2, {
+            auto path = JSI_ARG_STR(0);
+            auto mode = count > 1 && !args[1].isUndefined()
+                ? static_cast<FileOpenMode>(static_cast<int>(JSI_ARG_NUM(1)))
+                : FileOpenMode::Read;
+
+            auto handle = std::make_shared<IOFileHandle>(path, mode);
+            int handleId = nextHandleId_++;
+
+            {
+                std::lock_guard<std::mutex> lock(handlesMutex_);
+                fileHandles_[handleId] = handle;
+            }
+
+            return JSI_NUM(handleId);
+        })
+
+        // fileClose(handle) -> void
+        // Note: Remove from map first (under lock), then close outside lock
+        JSI_SYNC_METHOD(fileClose, 1, {
+            int handleId = static_cast<int>(JSI_ARG_NUM(0));
+            // Remove from map (lock-protected)
+            auto handle = removeHandle(handleId);
+            // Close outside lock to avoid deadlock
+            if (handle) {
+                handle->close();
+            }
+            return JSI_UNDEFINED;
+        })
+
+        // fileSeek(handle, offset, origin?) -> Promise<position>
+        JSI_ASYNC_METHOD(fileSeek, 3, {
+            auto handle = getHandle(static_cast<int>(JSI_N_ARG(0)));
+            int64_t offset = static_cast<int64_t>(JSI_N_ARG(1));
+            auto origin = JSI_N_OPT(2, 0) > 0
+                ? static_cast<SeekOrigin>(static_cast<int>(JSI_N_OPT(2, 0)))
+                : SeekOrigin::Begin;
+            return AsyncResult(static_cast<double>(handle->seek(offset, origin)));
+        })
+
+        // fileRewind(handle) -> Promise<void>
+        JSI_ASYNC_METHOD(fileRewind, 1, {
+            auto handle = getHandle(static_cast<int>(JSI_N_ARG(0)));
+            handle->rewind();
+            return AsyncResult();
+        })
+
+        // fileGetPosition(handle) -> Promise<number>
+        JSI_ASYNC_METHOD(fileGetPosition, 1, {
+            auto handle = getHandle(static_cast<int>(JSI_N_ARG(0)));
+            return AsyncResult(static_cast<double>(handle->getPosition()));
+        })
+
+        // fileGetSize(handle) -> Promise<number>
+        JSI_ASYNC_METHOD(fileGetSize, 1, {
+            auto handle = getHandle(static_cast<int>(JSI_N_ARG(0)));
+            return AsyncResult(static_cast<double>(handle->getSize()));
+        })
+
+        // fileIsEOF(handle) -> Promise<boolean>
+        JSI_ASYNC_METHOD(fileIsEOF, 1, {
+            auto handle = getHandle(static_cast<int>(JSI_N_ARG(0)));
+            return AsyncResult(handle->isEOF());
+        })
+
+        // ====================================================================
+        // Synchronous Methods (original filesystem operations)
         // ====================================================================
 
         // Query operations (1 param: path)
@@ -427,9 +535,66 @@ private:
             auto algorithm = static_cast<HashAlgorithm>(static_cast<int>(JSI_N_OPT(0, 2)));
             return AsyncResult(fs_->calcHash(JSI_S_ARG(0), algorithm));
         })
+
+        // ====================================================================
+        // File Handle Async Operations (I/O bound - use thread pool)
+        // ====================================================================
+
+        // fileFlush(handle) -> void (I/O operation - async)
+        JSI_ASYNC_METHOD(fileFlush, 1, {
+            int handleId = static_cast<int>(JSI_N_ARG(0));
+            getHandle(handleId)->flush();
+            return AsyncResult();
+        })
+
+        // fileTruncate(handle) -> void (I/O operation - async)
+        JSI_ASYNC_METHOD(fileTruncate, 1, {
+            int handleId = static_cast<int>(JSI_N_ARG(0));
+            getHandle(handleId)->truncate();
+            return AsyncResult();
+        })
+
+        // fileRead(handle, size?) -> ArrayBuffer
+        JSI_ASYNC_METHOD(fileRead, 2, {
+            int handleId = static_cast<int>(JSI_N_ARG(0));
+            int64_t size = jsiNumArgs.size() > 1 ? static_cast<int64_t>(JSI_N_ARG(1)) : -1;
+            return AsyncResult(getHandle(handleId)->read(size));
+        })
+
+        // fileReadString(handle, size?) -> string
+        JSI_ASYNC_METHOD(fileReadString, 2, {
+            int handleId = static_cast<int>(JSI_N_ARG(0));
+            int64_t size = jsiNumArgs.size() > 1 ? static_cast<int64_t>(JSI_N_ARG(1)) : -1;
+            return AsyncResult(getHandle(handleId)->readString(size));
+        })
+
+        // fileReadLine(handle) -> string
+        JSI_ASYNC_METHOD(fileReadLine, 1, {
+            int handleId = static_cast<int>(JSI_N_ARG(0));
+            return AsyncResult(getHandle(handleId)->readLine());
+        })
+
+        // fileWrite(handle, buffer) -> number (bytes written)
+        JSI_ASYNC_METHOD(fileWrite, 2, {
+            int handleId = static_cast<int>(JSI_N_ARG(0));
+            auto& buffer = JSI_BUF_ARG(0);
+            return AsyncResult(static_cast<double>(getHandle(handleId)->write(buffer)));
+        })
+
+        // fileWriteString(handle, string) -> number (bytes written)
+        JSI_ASYNC_METHOD(fileWriteString, 2, {
+            int handleId = static_cast<int>(JSI_N_ARG(0));
+            return AsyncResult(static_cast<double>(getHandle(handleId)->writeString(JSI_S_ARG(0))));
+        })
+
+        // fileWriteLine(handle, string) -> number (bytes written)
+        JSI_ASYNC_METHOD(fileWriteLine, 2, {
+            int handleId = static_cast<int>(JSI_N_ARG(0));
+            return AsyncResult(static_cast<double>(getHandle(handleId)->writeLine(JSI_S_ARG(0))));
+        })
     }
 };
 
-} // namespace io
+} // namespace rct_io
 
 #endif // IO_HOST_OBJECT_HPP
