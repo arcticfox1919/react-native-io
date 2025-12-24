@@ -16,5 +16,12 @@ Pod::Spec.new do |s|
   s.source_files = "ios/**/*.{h,m,mm,swift,cpp}"
   s.private_header_files = "ios/**/*.h"
 
+  # Enable high optimization for C++ code in Release builds
+  s.pod_target_xcconfig = {
+    "GCC_OPTIMIZATION_LEVEL" => "3", # -O3
+    "OTHER_CPLUSPLUSFLAGS" => "-DNDEBUG -O3",
+    "CLANG_CXX_LANGUAGE_STANDARD" => "c++20"
+  }
+
   install_modules_dependencies(s)
 end
