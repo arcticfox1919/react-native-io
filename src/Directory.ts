@@ -119,9 +119,9 @@ export class Directory {
     return this.fs().getParentPath(this._path);
   }
 
-  /** Parent directory instance */
+  /** Parent directory instance (shares the same IOFileSystem) */
   get parent(): Directory {
-    return new Directory(this.parentPath);
+    return new Directory(this.parentPath, this.fs());
   }
 
   // ==========================================================================
@@ -210,13 +210,13 @@ export class Directory {
   /**
    * Move/rename directory
    * @param destinationPath Destination path
-   * @returns New Directory instance at new location
+   * @returns New Directory instance at new location (shares the same IOFileSystem)
    */
   move(destinationPath: string): Promise<Directory> {
-    const fs = this._sharedFs ? this._fs! : undefined;
-    return this.fs()
+    const fsInstance = this.fs();
+    return fsInstance
       .moveDirectory(this._path, destinationPath)
-      .then(() => new Directory(destinationPath, fs));
+      .then(() => new Directory(destinationPath, fsInstance));
   }
 
   /**
@@ -231,26 +231,22 @@ export class Directory {
   /**
    * List only files in directory
    * @param recursive List recursively
+   * @returns Array of file entries
    */
-  listFiles(recursive: boolean = false): Promise<File[]> {
-    const fs = this._sharedFs ? this._fs! : undefined;
+  listFiles(recursive: boolean = false): Promise<DirectoryEntry[]> {
     return this.list(recursive).then((entries) =>
-      entries
-        .filter((e) => e.type === EntityType.File)
-        .map((e) => new File(e.path, fs))
+      entries.filter((e) => e.type === EntityType.File)
     );
   }
 
   /**
    * List only subdirectories
    * @param recursive List recursively
+   * @returns Array of directory entries
    */
-  listDirectories(recursive: boolean = false): Promise<Directory[]> {
-    const fs = this._sharedFs ? this._fs! : undefined;
+  listDirectories(recursive: boolean = false): Promise<DirectoryEntry[]> {
     return this.list(recursive).then((entries) =>
-      entries
-        .filter((e) => e.type === EntityType.Directory)
-        .map((e) => new Directory(e.path, fs))
+      entries.filter((e) => e.type === EntityType.Directory)
     );
   }
 
@@ -309,13 +305,13 @@ export class Directory {
   /**
    * Move/rename directory (sync)
    * @param destinationPath Destination path
-   * @returns New Directory instance at new location
+   * @returns New Directory instance at new location (shares the same IOFileSystem)
    * @warning Blocks JS thread. Prefer `move()` async version.
    */
   moveSync(destinationPath: string): Directory {
-    const fs = this._sharedFs ? this._fs! : undefined;
-    this.fs().moveDirectorySync(this._path, destinationPath);
-    return new Directory(destinationPath, fs);
+    const fsInstance = this.fs();
+    fsInstance.moveDirectorySync(this._path, destinationPath);
+    return new Directory(destinationPath, fsInstance);
   }
 
   /**
@@ -331,25 +327,23 @@ export class Directory {
   /**
    * List only files in directory (sync)
    * @param recursive List recursively
+   * @returns Array of file entries
    * @warning Blocks JS thread. Prefer `listFiles()` async version.
    */
-  listFilesSync(recursive: boolean = false): File[] {
-    const fs = this._sharedFs ? this._fs! : undefined;
-    return this.listSync(recursive)
-      .filter((e) => e.type === EntityType.File)
-      .map((e) => new File(e.path, fs));
+  listFilesSync(recursive: boolean = false): DirectoryEntry[] {
+    return this.listSync(recursive).filter((e) => e.type === EntityType.File);
   }
 
   /**
    * List only subdirectories (sync)
    * @param recursive List recursively
+   * @returns Array of directory entries
    * @warning Blocks JS thread. Prefer `listDirectories()` async version.
    */
-  listDirectoriesSync(recursive: boolean = false): Directory[] {
-    const fs = this._sharedFs ? this._fs! : undefined;
-    return this.listSync(recursive)
-      .filter((e) => e.type === EntityType.Directory)
-      .map((e) => new Directory(e.path, fs));
+  listDirectoriesSync(recursive: boolean = false): DirectoryEntry[] {
+    return this.listSync(recursive).filter(
+      (e) => e.type === EntityType.Directory
+    );
   }
 
   /**
@@ -376,21 +370,19 @@ export class Directory {
   // ==========================================================================
 
   /**
-   * Get a file in this directory
+   * Get a file in this directory (shares the same IOFileSystem)
    * @param name File name
    */
   file(name: string): File {
-    const fs = this._sharedFs ? this._fs! : undefined;
-    return new File(this.fs().joinPaths(this._path, name), fs);
+    return new File(this.fs().joinPaths(this._path, name), this.fs());
   }
 
   /**
-   * Get a subdirectory
+   * Get a subdirectory (shares the same IOFileSystem)
    * @param name Subdirectory name
    */
   directory(name: string): Directory {
-    const fs = this._sharedFs ? this._fs! : undefined;
-    return new Directory(this.fs().joinPaths(this._path, name), fs);
+    return new Directory(this.fs().joinPaths(this._path, name), this.fs());
   }
 
   /**

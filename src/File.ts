@@ -386,25 +386,25 @@ export class File {
    * Copy file to destination
    * @param destinationPath Destination path
    * @param overwrite Overwrite if exists (default: true)
-   * @returns New File instance for the copy
+   * @returns New File instance for the copy (shares the same IOFileSystem)
    */
   copy(destinationPath: string, overwrite: boolean = true): Promise<File> {
-    const fs = this._sharedFs ? this._fs! : undefined;
-    return this.fs()
+    const fsInstance = this.fs();
+    return fsInstance
       .copyFile(this._path, destinationPath, overwrite)
-      .then(() => new File(destinationPath, fs));
+      .then(() => new File(destinationPath, fsInstance));
   }
 
   /**
    * Move/rename file
    * @param destinationPath Destination path
-   * @returns New File instance at new location
+   * @returns New File instance at new location (shares the same IOFileSystem)
    */
   move(destinationPath: string): Promise<File> {
-    const fs = this._sharedFs ? this._fs! : undefined;
-    return this.fs()
+    const fsInstance = this.fs();
+    return fsInstance
       .moveFile(this._path, destinationPath)
-      .then(() => new File(destinationPath, fs));
+      .then(() => new File(destinationPath, fsInstance));
   }
 
   /**
@@ -441,25 +441,25 @@ export class File {
    * Copy file to destination (sync)
    * @param destinationPath Destination path
    * @param overwrite Overwrite if exists (default: true)
-   * @returns New File instance for the copy
+   * @returns New File instance for the copy (shares the same IOFileSystem)
    * @warning Blocks JS thread. Prefer `copy()` async version.
    */
   copySync(destinationPath: string, overwrite: boolean = true): File {
-    const fs = this._sharedFs ? this._fs! : undefined;
-    this.fs().copyFileSync(this._path, destinationPath, overwrite);
-    return new File(destinationPath, fs);
+    const fsInstance = this.fs();
+    fsInstance.copyFileSync(this._path, destinationPath, overwrite);
+    return new File(destinationPath, fsInstance);
   }
 
   /**
    * Move/rename file (sync)
    * @param destinationPath Destination path
-   * @returns New File instance at new location
+   * @returns New File instance at new location (shares the same IOFileSystem)
    * @warning Blocks JS thread. Prefer `move()` async version.
    */
   moveSync(destinationPath: string): File {
-    const fs = this._sharedFs ? this._fs! : undefined;
-    this.fs().moveFileSync(this._path, destinationPath);
-    return new File(destinationPath, fs);
+    const fsInstance = this.fs();
+    fsInstance.moveFileSync(this._path, destinationPath);
+    return new File(destinationPath, fsInstance);
   }
 
   // ==========================================================================
