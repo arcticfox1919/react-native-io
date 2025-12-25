@@ -1,6 +1,6 @@
 {
   "name": "react-native-io",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "The missing I/O library for React Native — files, network, and hashing in one blazing-fast C++ package.",
   "main": "./lib/module/index.js",
   "types": "./lib/typescript/src/index.d.ts",

@@ -52,14 +52,14 @@ yarn add react-native-io
 
 ### Recommended: Use `openFS()` for Most Scenarios
 
-**In 99% of cases, you should use `openFS()` to create an `FSContext`**. This is the recommended way to use this library:
+When you need to operate on **multiple files or directories**, use `openFS()` to create an `FSContext`:
 
-- ✅ Reuses the native thread pool across all operations
-- ✅ Better performance for multiple file/directory operations  
+- ✅ Reuses the native thread pool across all File and Directory instances
+- ✅ Better performance when working with multiple files/directories  
 - ✅ Unified management of File and Directory instances
 - ✅ Configurable concurrency with `openFS(threadCount)`
 
-> 💡 **Only use standalone `new File()` or `new Directory()` when you have exactly ONE operation to perform and won't need any follow-up operations.**
+> 💡 **Use standalone `new File()` or `new Directory()` when working with a single file or directory.** Each instance has its own thread pool, so all operations on the same instance share resources efficiently. For example, `new File(path).writeString(content)` is perfectly fine and concise for single-file operations.
 
 ```typescript
 import { openFS, FS, EntityType } from 'react-native-io';
@@ -385,26 +385,36 @@ const entriesSync = dir2.listSync();    // Sync list
 dir2.deleteSync(true);                  // Sync delete
 ```
 
-#### Why `FSContext` is Better for Multiple Operations
+#### When to Use `FSContext` vs Standalone Classes
 
-Now that you've seen standalone usage, here's why `FSContext` (`openFS()`) is recommended:
+Now that you've seen standalone usage, here's when to use each approach:
 
 ```typescript
-// ❌ WITHOUT FSContext - Each File/Directory creates its own thread pool
+// ✅ Standalone - Perfect for single file/directory operations
+// Each File/Directory instance has its own thread pool, and all operations
+// on the SAME instance share that pool efficiently.
+const file = new File('/path/to/config.json');
+await file.writeString('{"key": "value"}');   // Uses file's thread pool
+const content = await file.readString();       // Reuses same thread pool
+// Simple, concise, and efficient for single-file scenarios!
+
+// ❌ Problem: Multiple standalone instances = multiple thread pools
 const file1 = new File('/path/file1.txt');  // Creates thread pool #1
 const file2 = new File('/path/file2.txt');  // Creates thread pool #2
 const dir = new Directory('/path/dir');      // Creates thread pool #3
-// Problem: 3 separate thread pools = wasted resources!
+// 3 separate thread pools = wasted resources!
 
-// ✅ WITH FSContext - All operations share ONE thread pool
+// ✅ FSContext - Best for multiple files/directories
 const fs = openFS();                         // Creates ONE shared thread pool
 const file1 = fs.file('/path/file1.txt');   // Uses shared pool
 const file2 = fs.file('/path/file2.txt');   // Uses shared pool
 const dir = fs.directory('/path/dir');       // Uses shared pool
-// Benefit: All operations efficiently share resources!
+// All instances efficiently share the same thread pool!
 ```
 
-> 💡 **Summary**: Use `new File()` / `new Directory()` to understand the API. Use `openFS()` for production code.
+> 💡 **Summary**: 
+> - **Single file/directory**: Use `new File()` / `new Directory()` - simple and efficient
+> - **Multiple files/directories**: Use `openFS()` - shared thread pool saves resources
 
 ### Directory Operations Reference
 
