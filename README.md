@@ -1029,61 +1029,162 @@ writeHandle.close();
 console.log(handle.isClosed); // true
 ```
 
-### HTTP Requests
+### HTTP Client - File Download & Upload
 
-Python `requests`-style HTTP client:
+Built-in HTTP client optimized for **file transfers**. Pure C++ implementation delivers native-level performance for downloading and uploading files.
 
 ```typescript
-import { request, FS } from 'react-native-io';
+import { request, openFS, FS, HashAlgorithm } from 'react-native-io';
 
-// GET request
-const response = await request.get('https://api.example.com/users');
-console.log('Status:', response.status);
-console.log('OK:', response.ok);
+const fs = openFS();
 
-// Parse JSON
-const users = response.json();
+// ============================================================================
+// Download Files - Core Feature
+// ============================================================================
+// download(url, destinationPath, options?) downloads directly to disk.
+// - Streams data to file (memory-efficient for large files)
+// - Automatically creates parent directories if needed
+// - Returns Response object with status info
 
-// Get response text
-const text = response.text();
-
-// POST request (JSON)
-const res = await request.post('https://api.example.com/users', {
-  json: { name: 'John', age: 25 },
-  headers: { 'Authorization': 'Bearer token123' }
-});
-
-// POST request (custom body)
-const res2 = await request.post('https://api.example.com/data', {
-  body: 'custom string data',
-  headers: { 'Content-Type': 'text/plain' }
-});
-
-// Download file
+// Basic download
 await request.download(
-  'https://example.com/file.zip',
-  `${FS.cacheDir}/downloaded.zip`
+  'https://example.com/video.mp4',
+  `${FS.cacheDir}/video.mp4`
 );
 
-// Upload file
+// Download with options
+const downloadRes = await request.download(
+  'https://example.com/large-file.zip',
+  `${FS.documentDir}/downloads/archive.zip`,
+  {
+    headers: { 'Authorization': 'Bearer token123' },
+    timeout: 60000,  // 60 seconds for large files
+  }
+);
+
+if (downloadRes.ok) {
+  console.log('✅ Download complete!');
+  
+  // Verify file integrity with hash
+  const file = fs.file(`${FS.documentDir}/downloads/archive.zip`);
+  const hash = await file.calcHash(HashAlgorithm.SHA256);
+  console.log('File hash:', hash);
+} else {
+  console.log('❌ Download failed:', downloadRes.status, downloadRes.error);
+}
+
+// ============================================================================
+// Upload Files - Core Feature
+// ============================================================================
+// upload(url, filePath, options?) uploads a file to server.
+// - Streams file from disk (memory-efficient)
+// - Automatically sets Content-Type based on file extension
+// - Returns Response object with server response
+
+// Basic upload
 await request.upload(
   'https://api.example.com/upload',
   `${FS.documentDir}/photo.jpg`
 );
 
-// Custom request
-const customRes = await request.request('PUT', 'https://api.example.com/resource/123', {
-  json: { status: 'updated' },
-  timeout: 10000,              // 10 second timeout
-  followRedirects: true        // Follow redirects
+// Upload with custom headers and options
+const uploadRes = await request.upload(
+  'https://api.example.com/files/upload',
+  `${FS.documentDir}/document.pdf`,
+  {
+    headers: {
+      'Authorization': 'Bearer token123',
+      'X-Custom-Header': 'value'
+    },
+    timeout: 30000,
+  }
+);
+
+if (uploadRes.ok) {
+  // Parse server response (e.g., get uploaded file URL)
+  const result = uploadRes.json();
+  console.log('✅ Uploaded! File URL:', result.url);
+} else {
+  console.log('❌ Upload failed:', uploadRes.status, uploadRes.error);
+}
+
+// ============================================================================
+// Practical Example: Download → Process → Upload
+// ============================================================================
+
+async function processRemoteFile() {
+  const tempPath = `${FS.cacheDir}/temp_image.jpg`;
+  
+  // Step 1: Download image
+  const downloadRes = await request.download(
+    'https://example.com/source-image.jpg',
+    tempPath
+  );
+  if (!downloadRes.ok) throw new Error('Download failed');
+  
+  // Step 2: Read and process (e.g., get file info)
+  const file = fs.file(tempPath);
+  const size = await file.size();
+  const hash = await file.calcHash(HashAlgorithm.MD5);
+  console.log(`Downloaded: ${size} bytes, MD5: ${hash}`);
+  
+  // Step 3: Upload to another server
+  const uploadRes = await request.upload(
+    'https://api.example.com/images',
+    tempPath
+  );
+  if (!uploadRes.ok) throw new Error('Upload failed');
+  
+  // Step 4: Cleanup temp file
+  await file.delete();
+  
+  return uploadRes.json();
+}
+
+// ============================================================================
+// Standard HTTP Requests (GET, POST, PUT, DELETE, PATCH)
+// ============================================================================
+// For API calls that don't involve file transfers
+
+// GET request
+const response = await request.get('https://api.example.com/users');
+console.log('Status:', response.status);  // 200
+console.log('OK:', response.ok);          // true
+
+// Parse response
+const users = response.json();            // Parse as JSON
+const text = response.text();             // Get raw text
+
+// POST with JSON body
+const postRes = await request.post('https://api.example.com/users', {
+  json: { name: 'John', email: 'john@example.com' },
+  headers: { 'Authorization': 'Bearer token123' }
 });
 
-// Response object
-console.log(customRes.status);      // 200
-console.log(customRes.statusText);  // 'OK'
-console.log(customRes.headers);     // { 'content-type': 'application/json', ... }
-console.log(customRes.url);         // Final URL (after redirects)
-console.log(customRes.error);       // Error message (if failed)
+// PUT, DELETE, PATCH
+await request.put('https://api.example.com/users/1', { json: { name: 'Jane' } });
+await request.delete('https://api.example.com/users/1');
+await request.patch('https://api.example.com/users/1', { json: { status: 'active' } });
+
+// Custom request with full options
+const customRes = await request.request('POST', 'https://api.example.com/data', {
+  body: 'raw string data',                 // Raw body (mutually exclusive with json)
+  headers: { 'Content-Type': 'text/plain' },
+  timeout: 10000,                          // 10 second timeout
+  followRedirects: true                    // Follow 3xx redirects (default: true)
+});
+
+// ============================================================================
+// Response Object Reference
+// ============================================================================
+// All request methods return a Response object:
+
+console.log(response.status);      // HTTP status code: 200, 404, 500, etc.
+console.log(response.statusText);  // Status text: 'OK', 'Not Found', etc.
+console.log(response.ok);          // true if status is 2xx
+console.log(response.headers);     // Response headers: { 'content-type': '...', ... }
+console.log(response.url);         // Final URL (after any redirects)
+console.log(response.error);       // Error message if request failed (undefined otherwise)
 ```
 
 ### Hash Computation
