@@ -25,7 +25,7 @@ Pure C++ TurboModule | Built on C++20 Standard Library | Maximum Performance
 | **Directory Operations** | Create (recursive), List contents, List files only, List directories only, Rename, Delete (recursive) |
 | **FileHandle (Streaming)** | Open/Close, Seek, Read at position, Write at position, Truncate, Flush, Lock/Unlock |
 | **HTTP Client** | GET/POST/PUT/DELETE/PATCH, Custom headers, Timeout, Binary & text responses |
-| **Hash & Crypto** | MD5, SHA1, SHA256, SHA3, Keccak, CRC32, HMAC |
+| **Hash (File)** | MD5, SHA1, SHA256, SHA3, Keccak, CRC32 (via `file.calcHash()`) |
 | **Platform Directories** | cacheDir, documentDir, tempDir, libraryDir (iOS), bundleDir (iOS), externalFilesDir (Android) |
 | **Performance** | Sync & Async APIs, Configurable thread pool, Pure C++ implementation, Zero JS bridge overhead |
 
@@ -600,6 +600,90 @@ const cacheFile = fs.file(`${FS.cacheDir}/temp_data.bin`);    // Temporary cache
 const logsDir = fs.directory(`${FS.cacheDir}/logs`);          // Log files
 ```
 
+### Path Utilities & Storage Info
+
+```typescript
+import { FS } from 'react-native-io';
+
+// ============================================================================
+// FS.joinPaths(...segments) - Safely join path segments
+// ============================================================================
+// Use this instead of manual string concatenation to avoid path separator issues.
+// Handles trailing/leading slashes automatically.
+
+const filePath = FS.joinPaths(FS.documentDir, 'subfolder', 'data.json');
+// Result: '/data/data/com.app/files/subfolder/data.json'
+
+// Works with multiple segments
+const deepPath = FS.joinPaths(FS.cacheDir, 'level1', 'level2', 'level3', 'file.txt');
+// Result: '/data/data/com.app/cache/level1/level2/level3/file.txt'
+
+// Comparison with template string (both work, but joinPaths is safer):
+const path1 = `${FS.documentDir}/subfolder/data.json`;     // Template string
+const path2 = FS.joinPaths(FS.documentDir, 'subfolder', 'data.json');  // joinPaths
+// Both produce the same result, but joinPaths handles edge cases better
+
+// ============================================================================
+// Storage space information
+// ============================================================================
+
+// Get available (free) storage space in bytes
+const availableBytes = await FS.getAvailableSpace(FS.documentDir);
+const availableGB = availableBytes / (1024 * 1024 * 1024);
+console.log(`Available: ${availableGB.toFixed(2)} GB`);
+
+// Get total storage space in bytes
+const totalBytes = await FS.getTotalSpace(FS.documentDir);
+const totalGB = totalBytes / (1024 * 1024 * 1024);
+console.log(`Total: ${totalGB.toFixed(2)} GB`);
+
+// Sync versions (for quick checks)
+const availableSync = FS.getAvailableSpaceSync(FS.documentDir);
+const totalSync = FS.getTotalSpaceSync(FS.documentDir);
+
+// ============================================================================
+// String encoding utilities
+// ============================================================================
+// Use these when you need to convert between strings and binary data.
+// Native C++ implementation - faster than JavaScript's TextEncoder/TextDecoder.
+//
+// Supported encodings: 'utf8', 'utf16le', 'ascii', 'latin1'
+
+import { openFS, FS } from 'react-native-io';
+
+const fs = openFS();
+const file = fs.file(`${FS.cacheDir}/binary-text.bin`);
+
+// ============================================================================
+// Example: Write string as binary data to file
+// ============================================================================
+
+const originalText = 'Hello, World! 你好世界 🚀';
+
+// Step 1: Convert string to ArrayBuffer (binary data)
+const buffer = FS.encodeString(originalText, 'utf8');
+console.log('Encoded to', buffer.byteLength, 'bytes');
+
+// Step 2: Write binary data to file
+await file.writeBytes(new Uint8Array(buffer));
+console.log('Written to file:', file.path);
+
+// ============================================================================
+// Example: Read binary data from file and convert to string
+// ============================================================================
+
+// Step 1: Read file as binary data
+const readBytes = await file.readBytes();  // Returns Uint8Array
+console.log('Read', readBytes.length, 'bytes from file');
+
+// Step 2: Convert binary data back to string
+const restoredText = FS.decodeString(readBytes.buffer, 'utf8');
+console.log('Restored text:', restoredText);  // 'Hello, World! 你好世界 🚀'
+
+// Verify they match
+console.log('Match:', originalText === restoredText);  // true
+```
+
 ## Sync vs Async: Performance Trade-offs
 
 ### When to Use Sync APIs?
@@ -995,28 +1079,60 @@ console.log(customRes.error);       // Error message (if failed)
 ### Hash Computation
 
 ```typescript
-import { File, HashAlgorithm, computeHash } from 'react-native-io';
+import { openFS, FS, HashAlgorithm } from 'react-native-io';
 
-const file = new File('/path/to/file.txt');
+const fs = openFS();
+const file = fs.file(`${FS.cacheDir}/data.bin`);
 
-// File hash (async)
-const sha256 = await file.hash(HashAlgorithm.SHA256);
-const md5 = await file.hash(HashAlgorithm.MD5);
-const crc32 = await file.hash(HashAlgorithm.CRC32);
+// ============================================================================
+// Calculate file hash using calcHash(algorithm)
+// ============================================================================
+// calcHash() computes the hash of the ENTIRE file content.
+// It reads the file in chunks internally, so it's memory-efficient for large files.
+// Only async version is available (no sync version).
 
-// File hash (sync)
-const shaSync = file.hashSync(HashAlgorithm.SHA256);
+// SHA256 - Most commonly used, good balance of speed and security
+const sha256 = await file.calcHash(HashAlgorithm.SHA256);
+console.log('SHA256:', sha256);  // e.g., 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
 
-// String hash
-const textHash = computeHash('Hello, World!', HashAlgorithm.SHA256);
+// MD5 - Fast but NOT cryptographically secure, good for checksums
+const md5 = await file.calcHash(HashAlgorithm.MD5);
+console.log('MD5:', md5);  // e.g., 'd41d8cd98f00b204e9800998ecf8427e'
 
-// Binary data hash
-const bytes = new Uint8Array([0x48, 0x65, 0x6c, 0x6c, 0x6f]);
-const dataHash = computeHash(bytes, HashAlgorithm.SHA256);
+// SHA1 - Legacy, not recommended for security purposes
+const sha1 = await file.calcHash(HashAlgorithm.SHA1);
 
-// Supported algorithms
-// MD5, SHA1, SHA256, SHA3_224, SHA3_256, SHA3_384, SHA3_512
-// Keccak224, Keccak256 (Ethereum), Keccak384, Keccak512, CRC32
+// CRC32 - Very fast, for error detection (not security)
+const crc32 = await file.calcHash(HashAlgorithm.CRC32);
+
+// ============================================================================
+// All supported hash algorithms
+// ============================================================================
+// HashAlgorithm.MD5          - 128-bit, fast, insecure
+// HashAlgorithm.SHA1         - 160-bit, legacy
+// HashAlgorithm.SHA256       - 256-bit, recommended for most uses
+// HashAlgorithm.SHA3_224     - SHA-3 family, 224-bit
+// HashAlgorithm.SHA3_256     - SHA-3 family, 256-bit
+// HashAlgorithm.SHA3_384     - SHA-3 family, 384-bit  
+// HashAlgorithm.SHA3_512     - SHA-3 family, 512-bit
+// HashAlgorithm.Keccak224    - Original Keccak, 224-bit
+// HashAlgorithm.Keccak256    - Used by Ethereum
+// HashAlgorithm.Keccak384    - Original Keccak, 384-bit
+// HashAlgorithm.Keccak512    - Original Keccak, 512-bit
+// HashAlgorithm.CRC32        - 32-bit checksum, very fast
+
+// ============================================================================
+// Practical example: Verify file integrity after download
+// ============================================================================
+const downloadedFile = fs.file(`${FS.cacheDir}/downloaded.zip`);
+const expectedHash = 'abc123...';  // Hash provided by server
+
+const actualHash = await downloadedFile.calcHash(HashAlgorithm.SHA256);
+if (actualHash === expectedHash) {
+  console.log('✅ File integrity verified!');
+} else {
+  console.log('❌ File corrupted or tampered!');
+}
 ```
 
 ## Real-World Examples
