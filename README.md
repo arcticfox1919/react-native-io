@@ -7,7 +7,7 @@
 Pure C++ TurboModule | Built on C++20 Standard Library | Maximum Performance
 
 [![npm version](https://img.shields.io/npm/v/react-native-io.svg)](https://www.npmjs.com/package/react-native-io)
-[![license](https://img.shields.io/npm/l/react-native-io.svg)](https://github.com/bclz/react-native-io/blob/main/LICENSE)
+[![license](https://img.shields.io/npm/l/react-native-io.svg)](https://github.com/arcticfox1919/react-native-io/blob/main/LICENSE)
 
 </div>
 
