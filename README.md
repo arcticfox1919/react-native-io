@@ -55,7 +55,7 @@ yarn add react-native-io
 When you need to operate on **multiple files or directories**, use `openFS()` to create an `FSContext`:
 
 - ✅ Reuses the native thread pool across all File and Directory instances
-- ✅ Better performance when working with multiple files/directories  
+- ✅ Better performance when working with multiple files/directories
 - ✅ Unified management of File and Directory instances
 - ✅ Configurable concurrency with `openFS(threadCount)`
 
@@ -233,7 +233,7 @@ await file.writeString('\nAppended line', WriteMode.Append);      // Append mode
 
 // writeBytes(data, mode?) - Write binary data (Uint8Array)
 const binaryData = new Uint8Array([0x48, 0x65, 0x6c, 0x6c, 0x6f]); // "Hello" in ASCII
-await file.writeBytes(binaryData);
+await file.writeBytes(binaryData.buffer);
 
 // ============================================================================
 // Reading from files
@@ -257,7 +257,7 @@ const copyPath = `${FS.cacheDir}/copied-file.txt`;
 await file.copy(copyPath);
 console.log('Copied to:', copyPath);
 
-// move(destinationPath) - Move file to new location  
+// move(destinationPath) - Move file to new location
 // File is removed from original path, created at destination
 // After move, the File object's path is automatically updated!
 const movePath = `${FS.cacheDir}/moved-file.txt`;
@@ -335,7 +335,7 @@ const file2 = new File(`${dir.path}/image.png`);
 const subDir = new Directory(`${dir.path}/subFolder`);
 
 await file1.writeString('Document content');
-await file2.writeBytes(new Uint8Array([0x89, 0x50, 0x4E, 0x47])); // PNG header
+await file2.writeBytes(new Uint8Array([0x89, 0x50, 0x4E, 0x47]).buffer); // PNG header
 await subDir.create(true);
 
 // list() - Get ALL entries (files + subdirectories)
@@ -412,7 +412,7 @@ const dir = fs.directory('/path/dir');       // Uses shared pool
 // All instances efficiently share the same thread pool!
 ```
 
-> 💡 **Summary**: 
+> 💡 **Summary**:
 > - **Single file/directory**: Use `new File()` / `new Directory()` - simple and efficient
 > - **Multiple files/directories**: Use `openFS()` - shared thread pool saves resources
 
@@ -432,7 +432,7 @@ const dir = fs.directory(`${FS.cacheDir}/my-app/data`);
 // ============================================================================
 
 // create(recursive: boolean) - Create directory
-// 
+//
 // When recursive = true (RECOMMENDED):
 //   Creates the directory AND all missing parent directories
 //   Example: If /cache/my-app/ doesn't exist, it creates both /cache/my-app/ and /cache/my-app/data/
@@ -464,7 +464,7 @@ console.log(`Total entries: ${allEntries.length}`);
 
 // Each entry contains:
 // - name: string       (e.g., 'photo.jpg')
-// - path: string       (e.g., '/cache/my-app/data/photo.jpg')  
+// - path: string       (e.g., '/cache/my-app/data/photo.jpg')
 // - type: EntityType   (EntityType.File or EntityType.Directory)
 
 for (const entry of allEntries) {
@@ -557,7 +557,7 @@ console.log('Current platform:', FS.platform);  // 'ios' or 'android'
 // - Android: /data/data/<package>/cache
 console.log('Cache:', FS.cacheDir);
 
-// documentDir - For user documents and persistent data  
+// documentDir - For user documents and persistent data
 // - Persists until app is uninstalled
 // - iOS: <App>/Documents (BACKED UP to iCloud!)
 // - Android: /data/data/<package>/files
@@ -578,7 +578,7 @@ if (FS.platform === IOPlatformType.iOS) {
   // - Backed up to iCloud (except Caches subfolder)
   // - <App>/Library
   console.log('Library:', FS.libraryDir);
-  
+
   // bundleDir - Read-only app bundle resources
   // - Contains your app's compiled code and bundled assets
   // - CANNOT write to this directory!
@@ -595,7 +595,7 @@ if (FS.platform === IOPlatformType.Android) {
   // - Deleted when app is uninstalled
   // - /storage/emulated/0/Android/data/<package>/files
   console.log('External files:', FS.externalFilesDir);
-  
+
   // sdkVersion - Android API level (useful for compatibility checks)
   console.log('Android SDK version:', FS.sdkVersion);  // e.g., 33 for Android 13
 }
@@ -675,7 +675,7 @@ const buffer = FS.encodeString(originalText, 'utf8');
 console.log('Encoded to', buffer.byteLength, 'bytes');
 
 // Step 2: Write binary data to file
-await file.writeBytes(new Uint8Array(buffer));
+await file.writeBytes(buffer);
 console.log('Written to file:', file.path);
 
 // ============================================================================
@@ -742,10 +742,10 @@ if (exists) {
   // ✅ Large file read happens on background thread
   // UI remains responsive during the read!
   const data = await largeFile.readBytes();
-  
+
   // Process data...
   const processedData = processVideo(data);
-  
+
   // ✅ Write also happens on background thread
   await largeFile.writeBytes(processedData);
 }
@@ -842,7 +842,7 @@ await file.writeString('\nNew line', WriteMode.Append);       // Append to exist
 // Same modes as writeString
 const imageBytes = new Uint8Array([0xFF, 0xD8, 0xFF, 0xE0]); // JPEG header bytes
 const imageFile = fs.file(`${FS.cacheDir}/image.jpg`);
-await imageFile.writeBytes(imageBytes);
+await imageFile.writeBytes(imageBytes.buffer);
 
 // ============================================================================
 // Copying files
@@ -1064,7 +1064,7 @@ const downloadRes = await request.download(
 
 if (downloadRes.ok) {
   console.log('✅ Download complete!');
-  
+
   // Verify file integrity with hash
   const file = fs.file(`${FS.documentDir}/downloads/archive.zip`);
   const hash = await file.calcHash(HashAlgorithm.SHA256);
@@ -1114,30 +1114,30 @@ if (uploadRes.ok) {
 
 async function processRemoteFile() {
   const tempPath = `${FS.cacheDir}/temp_image.jpg`;
-  
+
   // Step 1: Download image
   const downloadRes = await request.download(
     'https://example.com/source-image.jpg',
     tempPath
   );
   if (!downloadRes.ok) throw new Error('Download failed');
-  
+
   // Step 2: Read and process (e.g., get file info)
   const file = fs.file(tempPath);
   const size = await file.size();
   const hash = await file.calcHash(HashAlgorithm.MD5);
   console.log(`Downloaded: ${size} bytes, MD5: ${hash}`);
-  
+
   // Step 3: Upload to another server
   const uploadRes = await request.upload(
     'https://api.example.com/images',
     tempPath
   );
   if (!uploadRes.ok) throw new Error('Upload failed');
-  
+
   // Step 4: Cleanup temp file
   await file.delete();
-  
+
   return uploadRes.json();
 }
 
@@ -1224,7 +1224,7 @@ const crc32 = await file.calcHash(HashAlgorithm.CRC32);
 // HashAlgorithm.SHA256       - 256-bit, recommended for most uses
 // HashAlgorithm.SHA3_224     - SHA-3 family, 224-bit
 // HashAlgorithm.SHA3_256     - SHA-3 family, 256-bit
-// HashAlgorithm.SHA3_384     - SHA-3 family, 384-bit  
+// HashAlgorithm.SHA3_384     - SHA-3 family, 384-bit
 // HashAlgorithm.SHA3_512     - SHA-3 family, 512-bit
 // HashAlgorithm.Keccak224    - Original Keccak, 224-bit
 // HashAlgorithm.Keccak256    - Used by Ethereum
@@ -1304,7 +1304,7 @@ const urls = [
 ];
 
 await Promise.all(
-  urls.map((url, i) => 
+  urls.map((url, i) =>
     request.download(url, `${imageDir.path}/image_${i}.jpg`)
   )
 );
@@ -1361,12 +1361,12 @@ import {
   Directory,
   FileHandle,
   FSContext,
-  
+
   // Functions
   openFS,
   request,
   computeHash,
-  
+
   // Enums
   EntityType,
   WriteMode,
@@ -1374,13 +1374,13 @@ import {
   FileOpenMode,
   SeekOrigin,
   IOPlatformType,
-  
+
   // Types
   FileMetadata,
   DirectoryEntry,
   Response,
   RequestOptions,
-  
+
   // Global objects
   FS,
   Platform
