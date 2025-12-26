@@ -36,6 +36,12 @@
 #include <filesystem>
 #include <cstdio>
 
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
+
 namespace rct_io {
 
 /**
