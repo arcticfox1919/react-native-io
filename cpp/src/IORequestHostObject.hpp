@@ -11,9 +11,13 @@
 #define IO_REQUEST_HOST_OBJECT_HPP
 
 #include "BS_thread_pool.hpp"
+#include "ThreadPoolReaper.hpp"
 #include "JSIHostObjectBase.hpp"
+#include "JSIArguments.hpp"
 #include "../network/IOHttpClient.hpp"
 #include <ReactCommon/CallInvoker.h>
+#include <algorithm>
+#include <filesystem>
 
 #ifdef __ANDROID__
 #include "../network/IOHttpClientAndroid.hpp"
@@ -38,9 +42,13 @@ private:
 
 public:
     explicit RequestThreadPoolExecutor(std::shared_ptr<BS::thread_pool<>> pool)
-        : pool_(std::move(pool)) {}
+        : pool_(std::move(pool)) { (void)ThreadPoolReaper::instance(); }
+
+    ~RequestThreadPoolExecutor() override { ThreadPoolReaper::instance().retire(std::move(pool_)); }
 
     void execute(std::function<void()>&& task) override {
+        // JSIHostObjectBase owns the global pending-operation lease until JS
+        // consumes (or the runtime drops) the completion callback.
         pool_->detach_task(std::move(task));
     }
 };
@@ -52,19 +60,15 @@ public:
 class RequestCallInvokerAdapter : public JSCallInvokerWrapper {
 private:
     std::shared_ptr<facebook::react::CallInvoker> invoker_;
-    Runtime* runtime_;
 
 public:
     RequestCallInvokerAdapter(
         std::shared_ptr<facebook::react::CallInvoker> invoker,
-        Runtime& runtime
-    ) : invoker_(std::move(invoker)), runtime_(&runtime) {}
+        Runtime& /*runtime*/
+    ) : invoker_(std::move(invoker)) {}
 
     void invokeAsync(std::function<void(Runtime&)>&& func) override {
-        auto rt = runtime_;
-        invoker_->invokeAsync([rt, func = std::move(func)]() mutable {
-            func(*rt);
-        });
+        invoker_->invokeAsync(std::move(func));
     }
 };
 
@@ -99,6 +103,38 @@ public:
         init();
     }
 
+    static void validateArguments(Runtime& rt, const std::string& name, const Value* args, size_t count) {
+        const auto signature = name == "request" ? "SSVDTB" : name == "download" ? "PPVTB" : "PPSSSVVVT";
+        validateSignature(rt, name, args, count, signature);
+        if ((name == "request" && args[2].asObject(rt).asArray(rt).size(rt) % 2 != 0) ||
+            (name == "download" && args[2].asObject(rt).asArray(rt).size(rt) % 2 != 0) ||
+            (name == "upload" && (args[5].asObject(rt).asArray(rt).size(rt) % 2 != 0 ||
+              args[6].asObject(rt).asArray(rt).size(rt) != args[7].asObject(rt).asArray(rt).size(rt))))
+            throw JSError(rt, "Invalid header/form key-value arrays");
+    }
+    static void validateHeaders(const HttpHeaders& headers) {
+        for (const auto& [key, value] : headers) {
+            const std::string token = "!#$%&'*+-.^_`|~";
+            if (!std::all_of(key.begin(), key.end(), [&](unsigned char c) {
+                  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || token.find(static_cast<char>(c)) != std::string::npos;
+                }) || !std::all_of(value.begin(), value.end(), [](unsigned char c) { return c == '\t' || (c >= 32 && c != 127); }))
+                throw std::invalid_argument("Invalid HTTP header characters");
+            if (key.empty() || key.find_first_of("\r\n") != std::string::npos || value.find_first_of("\r\n") != std::string::npos ||
+                key.find('\0') != std::string::npos || value.find('\0') != std::string::npos)
+                throw std::invalid_argument("Invalid HTTP header");
+        }
+    }
+    static void validateMultipart(const std::string& text) {
+        if (text.find_first_of("\r\n\"\\") != std::string::npos || text.find('\0') != std::string::npos)
+            throw std::invalid_argument("Invalid multipart field/file name or MIME type");
+    }
+    static void appendArgumentMetadata(Runtime& rt, const std::string& name, const Value* args, std::vector<double>& numbers) {
+        if (name == "upload") {
+            numbers.push_back(args[5].asObject(rt).asArray(rt).size(rt) / 2);
+            numbers.push_back(args[6].asObject(rt).asArray(rt).size(rt));
+        }
+    }
+
     // Required for async methods
     TaskExecutor* getTaskExecutor() { return executor_.get(); }
 
@@ -106,14 +142,14 @@ private:
     // ========================================================================
     // Helper: Convert HttpResponse to AsyncResult
     // ========================================================================
-    static AsyncResult responseToAsyncResult(const HttpResponse& response) {
+    static AsyncResult responseToAsyncResult(HttpResponse response) {
         AsyncResultMap obj;
         obj.emplace("success", response.success);
         obj.emplace("statusCode", static_cast<double>(response.statusCode));
         obj.emplace("statusMessage", response.statusMessage);
         obj.emplace("url", response.url);
         obj.emplace("errorMessage", response.errorMessage);
-        obj.emplace("body", response.body);  // vector<uint8_t> -> ArrayBuffer
+        obj.emplace("body", std::move(response.body));  // vector<uint8_t> -> ArrayBuffer
 
         // Headers as parallel arrays
         std::vector<AsyncResult> headerKeys;
@@ -146,11 +182,11 @@ private:
     // ========================================================================
     // Helper: Convert UploadResult to AsyncResult
     // ========================================================================
-    static AsyncResult uploadResultToAsyncResult(const UploadResult& result) {
+    static AsyncResult uploadResultToAsyncResult(UploadResult result) {
         AsyncResultMap obj;
         obj.emplace("success", result.success);
         obj.emplace("statusCode", static_cast<double>(result.statusCode));
-        obj.emplace("responseBody", result.responseBody);  // vector<uint8_t> -> ArrayBuffer
+        obj.emplace("responseBody", std::move(result.responseBody));  // vector<uint8_t> -> ArrayBuffer
         obj.emplace("errorMessage", result.errorMessage);
         return AsyncResult(std::move(obj));
     }
@@ -184,7 +220,10 @@ private:
 
             // url and method are first two string args
             config.url = JSI_S_ARG(0);
-            config.method = stringToHttpMethod(JSI_S_ARG(1));
+            auto method = JSI_S_ARG(1);
+            if (method != "GET" && method != "POST" && method != "PUT" && method != "DELETE" && method != "PATCH" && method != "HEAD" && method != "OPTIONS")
+                throw std::invalid_argument("Unsupported HTTP method");
+            config.method = stringToHttpMethod(method);
             config.timeoutMs = static_cast<int32_t>(JSI_N_ARG(0));
             config.followRedirects = JSI_B_ARG(0);
 
@@ -208,8 +247,9 @@ private:
                 config.headers[jsiStrArgs[2 + i]] = jsiStrArgs[2 + i + 1];
             }
 
+            validateHeaders(config.headers);
             auto response = client_->request(config);
-            return responseToAsyncResult(response);
+            return responseToAsyncResult(std::move(response));
         })
 
         // ====================================================================
@@ -229,6 +269,7 @@ private:
                 config.headers[jsiStrArgs[i]] = jsiStrArgs[i + 1];
             }
 
+            validateHeaders(config.headers);
             auto result = client_->download(config);
             return downloadResultToAsyncResult(result);
         })
@@ -250,8 +291,8 @@ private:
             config.timeoutMs = static_cast<int32_t>(JSI_N_ARG(0));
 
             // Parse headerCount and formFieldCount from numbers if available
-            size_t headerCount = jsiNumArgs.size() > 1 ? static_cast<size_t>(jsiNumArgs[1]) : 0;
-            size_t formFieldCount = jsiNumArgs.size() > 2 ? static_cast<size_t>(jsiNumArgs[2]) : 0;
+            size_t headerCount = jsiNumArgs.size() > 1 ? static_cast<size_t>(jsiNumArgs.at(1)) : 0;
+            size_t formFieldCount = jsiNumArgs.size() > 2 ? static_cast<size_t>(jsiNumArgs.at(2)) : 0;
 
             // Headers start at index 5
             size_t headerStartIdx = 5;
@@ -271,8 +312,11 @@ private:
                 }
             }
 
+            validateHeaders(config.headers);
+            validateMultipart(config.fieldName); validateMultipart(config.fileName.empty() ? std::filesystem::path(config.filePath).filename().string() : config.fileName); validateMultipart(config.mimeType);
+            for (const auto& [key, value] : config.formFields) { (void)value; validateMultipart(key); }
             auto result = client_->upload(config);
-            return uploadResultToAsyncResult(result);
+            return uploadResultToAsyncResult(std::move(result));
         })
     }
 };

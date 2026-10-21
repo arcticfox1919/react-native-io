@@ -26,7 +26,7 @@ import { FileOpenMode, SeekOrigin } from './types';
  *   console.log(line);
  * }
  *
- * handle.close();
+ * await handle.closeAsync();
  * ```
  *
  * @example
@@ -35,13 +35,14 @@ import { FileOpenMode, SeekOrigin } from './types';
  * const handle = fs.open('/path/to/output.txt', FileOpenMode.Write);
  * await handle.writeLine('First line');
  * await handle.writeLine('Second line');
- * handle.close();
+ * await handle.closeAsync();
  * ```
  */
 export class FileHandle {
   private _fs: IOFileSystem;
   private _handle: number;
   private _closed: boolean = false;
+  private _closePromise?: Promise<void>;
 
   /**
    * @internal
@@ -66,9 +67,31 @@ export class FileHandle {
    */
   close(): void {
     if (!this._closed) {
-      this._fs.fileClose(this._handle);
-      this._closed = true;
+      try {
+        this._fs.fileClose(this._handle);
+      } finally {
+        this._closed = true;
+      }
     }
+  }
+
+  /**
+   * Close without waiting for an in-flight native operation on the JS thread.
+   * Prefer this form when operations may still be settling.
+   */
+  closeAsync(): Promise<void> {
+    if (this._closePromise) return this._closePromise;
+    if (this._closed) return Promise.resolve();
+
+    this._closed = true;
+    try {
+      this._closePromise = this._fs.fileCloseAsync(this._handle);
+    } catch (error) {
+      // Keep the asynchronous API contract even if argument validation or
+      // backpressure rejects synchronously inside the JSI function.
+      this._closePromise = Promise.reject(error);
+    }
+    return this._closePromise;
   }
 
   /**

@@ -12,15 +12,14 @@ import {
   type FileMetadata,
   type IOFileSystem,
 } from './types';
-import { createFileSystem } from './NativeStdIO';
+import { getDefaultFileSystem } from './NativeStdIO';
 
 /**
  * Represents a directory on the filesystem.
  *
  * Provides methods to create, list, and manage directories.
- * Each Directory instance lazily creates its own native FileSystem client,
- * which will be automatically released by garbage collection when
- * the Directory object becomes unreachable.
+ * Standalone Directory instances lazily share the default native FileSystem client,
+ * which remains available for the JavaScript runtime lifetime.
  *
  * **Recommendation**: Use async methods (no suffix) for I/O operations.
  * Sync methods block the JS thread and should only be used when necessary.
@@ -37,8 +36,8 @@ import { createFileSystem } from './NativeStdIO';
  *   const entries = await dir.list();
  * }
  *
- * // Optional: explicitly release native resources immediately
- * // (not required - GC will handle this automatically)
+ * // Optional: release this object's reference to the shared filesystem.
+ * // The runtime-wide default worker remains available for reuse.
  * dir.dispose();
  * ```
  */
@@ -66,31 +65,19 @@ export class Directory {
 
   /**
    * Get or create the underlying IOFileSystem instance (lazy initialization).
-   * Always uses a single-threaded pool for individual Directory operations.
+   * Standalone paths share one default worker; use openFS(n) for isolated concurrency.
    */
   private fs(): IOFileSystem {
     if (!this._fs) {
-      this._fs = createFileSystem(1);
+      this._fs = getDefaultFileSystem();
     }
     return this._fs;
   }
 
   /**
-   * Release the underlying IOFileSystem instance.
-   *
-   * **Note**: This method is NOT required to be called.
-   * When the Directory object becomes unreachable, JavaScript's garbage collector
-   * will automatically release the native IOFileSystem and its thread pool.
-   *
-   * If this Directory was created with a shared IOFileSystem (passed via constructor),
-   * calling dispose() will NOT release it - the shared instance is managed
-   * by its owner (e.g., a FileSystem context).
-   *
-   * However, calling `dispose()` explicitly on a Directory with its own IOFileSystem
-   * allows you to release native resources immediately, which can be useful when:
-   * - You want deterministic resource cleanup
-   * - You're done with directory operations and want to free the thread pool sooner
-   * - Memory pressure is a concern
+   * Release this object's filesystem reference. The runtime's shared default
+   * worker remains available to other standalone paths. An explicit FSContext
+   * owns shared children and controls their lifetime through close().
    */
   dispose(): void {
     // Only release if we own the fs (not shared)

@@ -12,7 +12,17 @@
     "test:android": "react-native-harness --harnessRunner android",
     "test:ios": "react-native-harness --harnessRunner ios",
     "test:android:watch": "react-native-harness --harnessRunner android --watch",
-    "test:ios:watch": "react-native-harness --harnessRunner ios --watch"
+    "test:ios:watch": "react-native-harness --harnessRunner ios --watch",
+    "test:engine": "node scripts/test-engine.cjs",
+    "test:fixture": "python3 scripts/http_server.py",
+    "test:quality:ios": "react-native-harness --harnessRunner ios Quality.harness.ts",
+    "test:quality:android": "react-native-harness --harnessRunner android Quality.harness.ts",
+    "test:fixture-contract": "python3 scripts/test-fixture.py",
+    "test:native": "bash scripts/test-native.sh",
+    "test:wrappers": "node tests/wrappers.cjs",
+    "test:android-http": "bash scripts/test-android-http.sh",
+    "test:apple-http": "bash scripts/test-apple-http.sh",
+    "bench:hash": "bash scripts/benchmark-hash.sh"
   },
   "dependencies": {
     "react": "19.2.0",

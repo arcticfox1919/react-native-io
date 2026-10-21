@@ -34,12 +34,9 @@ public:
                         UploadProgressCallback progressCallback = nullptr) override;
 
 private:
-    NSURLSession* session_;
-    NSOperationQueue* delegateQueue_;
-
     NSMutableURLRequest* createRequest(const HttpRequestConfig& config);
     HttpResponse convertResponse(NSHTTPURLResponse* response, NSData* data, NSError* error);
-    NSData* createMultipartBody(const UploadConfig& config, NSString** boundary);
+    NSURL* createMultipartBody(const UploadConfig& config, NSString** boundary);
 };
 
 } // namespace rct_io::network

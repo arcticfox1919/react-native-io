@@ -104,3 +104,7 @@ metro-cache/
 *.lock
 *.mobileprovision
 
+
+# Test reports are runtime artifacts; keep only the human-readable summary.
+/example/reports/*
+!/example/reports/README.md

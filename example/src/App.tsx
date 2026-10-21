@@ -1,835 +1,96 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useState } from 'react';
 import {
-  Text,
-  View,
+  SafeAreaView,
+  StatusBar,
   StyleSheet,
-  ScrollView,
+  Text,
   TouchableOpacity,
+  View,
 } from 'react-native';
-import {
-  FS,
-  HashAlgorithm,
-  request,
-  openFS,
-  FileOpenMode,
-  SeekOrigin,
-} from 'react-native-io';
+import SmokeApp from './SmokeApp';
+import QualityPanel from './quality/QualityPanel';
+import BenchmarkApp from './quality/BenchmarkApp';
+import AutoApp from './quality/AutoApp';
+import type { DeviceLaunchOptions } from './quality/deviceOptions';
 
-type TestResult = {
-  name: string;
-  status: 'pending' | 'pass' | 'fail';
-  error?: string;
-  duration?: number;
-};
-
-type TestDef = {
-  name: string;
-  setup?: () => Promise<void>;
-  fn: () => Promise<void> | void;
-  verify?: () => Promise<void> | void;
-};
-
-export default function App() {
-  const [results, setResults] = useState<TestResult[]>([]);
-  const [running, setRunning] = useState(false);
-
-  const updateResult = (
-    name: string,
-    status: 'pass' | 'fail',
-    error?: string,
-    duration?: number
-  ) => {
-    setResults((prev) =>
-      prev.map((r) => (r.name === name ? { ...r, status, error, duration } : r))
-    );
-  };
-
-  const runTests = useCallback(async () => {
-    const tempDir = FS.tempDir;
-    const testDir = `${tempDir}/io_test_${Date.now()}`;
-    const fs = openFS(5);
-    const file = (path: string) => fs.file(path);
-    const dir = (path: string) => fs.directory(path);
-
-    // Warm up
-    const warmupDir = dir(`${tempDir}/warmup_${Date.now()}`);
-    await warmupDir.create();
-    await warmupDir.delete();
-
-    // Shared test data
-    let testFileContent = '';
-    let testFileBytes: ArrayBuffer;
-
-    const tests: TestDef[] = [
-      // ==================== Directory Tests ====================
-      {
-        name: 'Directory.create() async',
-        fn: async () => {
-          await dir(testDir).create(true);
-        },
-        verify: async () => {
-          if (!(await dir(testDir).exists())) throw new Error('Not created');
-        },
-      },
-      {
-        name: 'Directory.create() sync',
-        fn: () => {
-          dir(`${testDir}/sync_dir`).createSync(true);
-        },
-        verify: () => {
-          if (!dir(`${testDir}/sync_dir`).existsSync())
-            throw new Error('Not created');
-        },
-      },
-      {
-        name: 'Directory.exists() async',
-        fn: async () => {
-          await dir(testDir).exists();
-        },
-      },
-      {
-        name: 'Directory.exists() sync',
-        fn: () => {
-          dir(testDir).existsSync();
-        },
-      },
-      {
-        name: 'Directory.isDirectory() async',
-        fn: async () => {
-          await dir(testDir).isDirectory();
-        },
-      },
-      {
-        name: 'Directory.isDirectory() sync',
-        fn: () => {
-          dir(testDir).isDirectorySync();
-        },
-      },
-      {
-        name: 'Directory.metadata() async',
-        fn: async () => {
-          await dir(testDir).metadata();
-        },
-      },
-      {
-        name: 'Directory.metadata() sync',
-        fn: () => {
-          dir(testDir).metadataSync();
-        },
-      },
-      {
-        name: 'Directory.absolutePath() async',
-        fn: async () => {
-          await dir(testDir).absolutePath();
-        },
-      },
-      {
-        name: 'Directory.absolutePath() sync',
-        fn: () => {
-          dir(testDir).absolutePathSync();
-        },
-      },
-      {
-        name: 'Directory.list() async',
-        setup: async () => {
-          await file(`${testDir}/list_test/a.txt`).writeString('a');
-          await file(`${testDir}/list_test/b.txt`).writeString('b');
-        },
-        fn: async () => {
-          await dir(`${testDir}/list_test`).list();
-        },
-      },
-      {
-        name: 'Directory.list() sync',
-        fn: () => {
-          dir(`${testDir}/list_test`).listSync();
-        },
-      },
-      {
-        name: 'Directory.delete() async',
-        setup: async () => {
-          await dir(`${testDir}/del_async`).create();
-        },
-        fn: async () => {
-          await dir(`${testDir}/del_async`).delete();
-        },
-      },
-      {
-        name: 'Directory.delete() sync',
-        setup: async () => {
-          await dir(`${testDir}/del_sync`).create();
-        },
-        fn: () => {
-          dir(`${testDir}/del_sync`).deleteSync();
-        },
-      },
-      {
-        name: 'Directory.move() async',
-        setup: async () => {
-          await dir(`${testDir}/move_src`).create();
-        },
-        fn: async () => {
-          await dir(`${testDir}/move_src`).move(`${testDir}/move_dst`);
-        },
-      },
-      {
-        name: 'Directory.move() sync',
-        setup: async () => {
-          await dir(`${testDir}/move_src2`).create();
-        },
-        fn: () => {
-          dir(`${testDir}/move_src2`).moveSync(`${testDir}/move_dst2`);
-        },
-      },
-
-      // ==================== File Write Tests ====================
-      {
-        name: 'File.create() async',
-        fn: async () => {
-          await file(`${testDir}/create_async.txt`).create();
-        },
-      },
-      {
-        name: 'File.create() sync',
-        fn: () => {
-          file(`${testDir}/create_sync.txt`).createSync();
-        },
-      },
-      {
-        name: 'File.writeString() async',
-        fn: async () => {
-          await file(`${testDir}/write_async.txt`).writeString('Hello');
-        },
-      },
-      {
-        name: 'File.writeString() sync',
-        fn: () => {
-          file(`${testDir}/write_sync.txt`).writeStringSync('Hello');
-        },
-      },
-      {
-        name: 'File.appendString() async',
-        setup: async () => {
-          await file(`${testDir}/append_async.txt`).writeString('A');
-        },
-        fn: async () => {
-          await file(`${testDir}/append_async.txt`).appendString('B');
-        },
-      },
-      {
-        name: 'File.appendString() sync',
-        setup: async () => {
-          await file(`${testDir}/append_sync.txt`).writeString('A');
-        },
-        fn: () => {
-          file(`${testDir}/append_sync.txt`).appendStringSync('B');
-        },
-      },
-      {
-        name: 'File.writeBytes() async',
-        fn: async () => {
-          const data = new Uint8Array([1, 2, 3, 4, 5]).buffer;
-          await file(`${testDir}/bytes_async.bin`).writeBytes(data);
-        },
-      },
-      {
-        name: 'File.writeBytes() sync',
-        fn: () => {
-          const data = new Uint8Array([1, 2, 3, 4, 5]).buffer;
-          file(`${testDir}/bytes_sync.bin`).writeBytesSync(data);
-        },
-      },
-
-      // ==================== File Read Tests ====================
-      {
-        name: 'File.readString() async',
-        setup: async () => {
-          await file(`${testDir}/read_str.txt`).writeString('Content');
-        },
-        fn: async () => {
-          testFileContent = await file(`${testDir}/read_str.txt`).readString();
-        },
-        verify: () => {
-          if (testFileContent !== 'Content') throw new Error('Mismatch');
-        },
-      },
-      {
-        name: 'File.readString() sync',
-        fn: () => {
-          testFileContent = file(`${testDir}/read_str.txt`).readStringSync();
-        },
-        verify: () => {
-          if (testFileContent !== 'Content') throw new Error('Mismatch');
-        },
-      },
-      {
-        name: 'File.readBytes() async',
-        setup: async () => {
-          await file(`${testDir}/read_bytes.bin`).writeBytes(
-            new Uint8Array([1, 2, 3]).buffer
-          );
-        },
-        fn: async () => {
-          testFileBytes = await file(`${testDir}/read_bytes.bin`).readBytes();
-        },
-        verify: () => {
-          if (new Uint8Array(testFileBytes)[0] !== 1)
-            throw new Error('Mismatch');
-        },
-      },
-      {
-        name: 'File.readBytes() sync',
-        fn: () => {
-          testFileBytes = file(`${testDir}/read_bytes.bin`).readBytesSync();
-        },
-        verify: () => {
-          if (new Uint8Array(testFileBytes)[0] !== 1)
-            throw new Error('Mismatch');
-        },
-      },
-      {
-        name: 'File.readLines() async',
-        setup: async () => {
-          await file(`${testDir}/lines.txt`).writeString('L1\nL2\nL3');
-        },
-        fn: async () => {
-          await file(`${testDir}/lines.txt`).readLines();
-        },
-      },
-      {
-        name: 'File.readLines() sync',
-        fn: () => {
-          file(`${testDir}/lines.txt`).readLinesSync();
-        },
-      },
-
-      // ==================== File Property Tests ====================
-      {
-        name: 'File.exists() async',
-        setup: async () => {
-          await file(`${testDir}/exists.txt`).writeString('x');
-        },
-        fn: async () => {
-          await file(`${testDir}/exists.txt`).exists();
-        },
-      },
-      {
-        name: 'File.exists() sync',
-        fn: () => {
-          file(`${testDir}/exists.txt`).existsSync();
-        },
-      },
-      {
-        name: 'File.isFile() async',
-        fn: async () => {
-          await file(`${testDir}/exists.txt`).isFile();
-        },
-      },
-      {
-        name: 'File.isFile() sync',
-        fn: () => {
-          file(`${testDir}/exists.txt`).isFileSync();
-        },
-      },
-      {
-        name: 'File.size() async',
-        fn: async () => {
-          await file(`${testDir}/exists.txt`).size();
-        },
-      },
-      {
-        name: 'File.size() sync',
-        fn: () => {
-          file(`${testDir}/exists.txt`).sizeSync();
-        },
-      },
-      {
-        name: 'File.metadata() async',
-        fn: async () => {
-          await file(`${testDir}/exists.txt`).metadata();
-        },
-      },
-      {
-        name: 'File.metadata() sync',
-        fn: () => {
-          file(`${testDir}/exists.txt`).metadataSync();
-        },
-      },
-      {
-        name: 'File.modifiedTime() async',
-        fn: async () => {
-          await file(`${testDir}/exists.txt`).modifiedTime();
-        },
-      },
-      {
-        name: 'File.modifiedTime() sync',
-        fn: () => {
-          file(`${testDir}/exists.txt`).modifiedTimeSync();
-        },
-      },
-      {
-        name: 'File.absolutePath() async',
-        fn: async () => {
-          await file(`${testDir}/exists.txt`).absolutePath();
-        },
-      },
-      {
-        name: 'File.absolutePath() sync',
-        fn: () => {
-          file(`${testDir}/exists.txt`).absolutePathSync();
-        },
-      },
-
-      // ==================== File Operation Tests ====================
-      {
-        name: 'File.copy() async',
-        setup: async () => {
-          await file(`${testDir}/copy_src.txt`).writeString('copy');
-        },
-        fn: async () => {
-          await file(`${testDir}/copy_src.txt`).copy(`${testDir}/copy_dst.txt`);
-        },
-      },
-      {
-        name: 'File.copy() sync',
-        setup: async () => {
-          await file(`${testDir}/copy_src2.txt`).writeString('copy');
-        },
-        fn: () => {
-          file(`${testDir}/copy_src2.txt`).copySync(`${testDir}/copy_dst2.txt`);
-        },
-      },
-      {
-        name: 'File.move() async',
-        setup: async () => {
-          await file(`${testDir}/move_src.txt`).writeString('move');
-        },
-        fn: async () => {
-          await file(`${testDir}/move_src.txt`).move(`${testDir}/move_dst.txt`);
-        },
-      },
-      {
-        name: 'File.move() sync',
-        setup: async () => {
-          await file(`${testDir}/move_src2.txt`).writeString('move');
-        },
-        fn: () => {
-          file(`${testDir}/move_src2.txt`).moveSync(`${testDir}/move_dst2.txt`);
-        },
-      },
-      {
-        name: 'File.delete() async',
-        setup: async () => {
-          await file(`${testDir}/del_async.txt`).writeString('del');
-        },
-        fn: async () => {
-          await file(`${testDir}/del_async.txt`).delete();
-        },
-      },
-      {
-        name: 'File.delete() sync',
-        setup: async () => {
-          await file(`${testDir}/del_sync.txt`).writeString('del');
-        },
-        fn: () => {
-          file(`${testDir}/del_sync.txt`).deleteSync();
-        },
-      },
-
-      // ==================== Hash Tests ====================
-      {
-        name: 'File.calcHash(md5)',
-        setup: async () => {
-          await file(`${testDir}/hash.txt`).writeString('hash content');
-        },
-        fn: async () => {
-          await file(`${testDir}/hash.txt`).calcHash(HashAlgorithm.MD5);
-        },
-      },
-      {
-        name: 'File.calcHash(sha256)',
-        fn: async () => {
-          await file(`${testDir}/hash.txt`).calcHash(HashAlgorithm.SHA256);
-        },
-      },
-
-      // ==================== File Handle Tests ====================
-      {
-        name: 'FileHandle.open() + close()',
-        fn: () => {
-          const handle = fs.open(`${testDir}/hash.txt`, FileOpenMode.Read);
-          handle.close();
-        },
-      },
-      {
-        name: 'FileHandle.readString()',
-        fn: async () => {
-          const handle = fs.open(`${testDir}/hash.txt`, FileOpenMode.Read);
-          const content = await handle.readString();
-          handle.close();
-          if (content !== 'hash content')
-            throw new Error(`Unexpected: ${content}`);
-        },
-      },
-      {
-        name: 'FileHandle.writeString()',
-        setup: async () => {
-          await file(`${testDir}/handle_write.txt`).writeString('');
-        },
-        fn: async () => {
-          const handle = fs.open(
-            `${testDir}/handle_write.txt`,
-            FileOpenMode.Write
-          );
-          const written = await handle.writeString('Hello Handle');
-          handle.close();
-          if (written !== 12) throw new Error(`Written: ${written}`);
-        },
-        verify: async () => {
-          const content = await file(
-            `${testDir}/handle_write.txt`
-          ).readString();
-          if (content !== 'Hello Handle')
-            throw new Error(`Verify failed: ${content}`);
-        },
-      },
-      {
-        name: 'FileHandle.readLine()',
-        setup: async () => {
-          await file(`${testDir}/lines.txt`).writeString('line1\nline2\nline3');
-        },
-        fn: async () => {
-          const handle = fs.open(`${testDir}/lines.txt`, FileOpenMode.Read);
-          const line1 = await handle.readLine();
-          const line2 = await handle.readLine();
-          handle.close();
-          if (line1 !== 'line1') throw new Error(`Line1: ${line1}`);
-          if (line2 !== 'line2') throw new Error(`Line2: ${line2}`);
-        },
-      },
-      {
-        name: 'FileHandle.writeLine()',
-        fn: async () => {
-          const handle = fs.open(
-            `${testDir}/writelines.txt`,
-            FileOpenMode.Write
-          );
-          await handle.writeLine('first');
-          await handle.writeLine('second');
-          handle.close();
-        },
-        verify: async () => {
-          const content = await file(`${testDir}/writelines.txt`).readString();
-          if (content !== 'first\nsecond\n')
-            throw new Error(`Content: ${content}`);
-        },
-      },
-      {
-        name: 'FileHandle.seek() + getPosition()',
-        fn: async () => {
-          const handle = fs.open(`${testDir}/lines.txt`, FileOpenMode.Read);
-          await handle.seek(6, SeekOrigin.Begin);
-          const pos = await handle.getPosition();
-          const line = await handle.readLine();
-          handle.close();
-          if (pos !== 6) throw new Error(`Position: ${pos}`);
-          if (line !== 'line2') throw new Error(`Line: ${line}`);
-        },
-      },
-      {
-        name: 'FileHandle.rewind()',
-        fn: async () => {
-          const handle = fs.open(`${testDir}/lines.txt`, FileOpenMode.Read);
-          await handle.readLine();
-          await handle.rewind();
-          const line = await handle.readLine();
-          handle.close();
-          if (line !== 'line1') throw new Error(`Line after rewind: ${line}`);
-        },
-      },
-      {
-        name: 'FileHandle.getSize()',
-        fn: async () => {
-          const handle = fs.open(`${testDir}/hash.txt`, FileOpenMode.Read);
-          const size = await handle.getSize();
-          handle.close();
-          if (size !== 12) throw new Error(`Size: ${size}`);
-        },
-      },
-      {
-        name: 'FileHandle.isEOF()',
-        fn: async () => {
-          const handle = fs.open(`${testDir}/hash.txt`, FileOpenMode.Read);
-          if (await handle.isEOF()) throw new Error('EOF at start');
-          await handle.readString();
-          if (!(await handle.isEOF()))
-            throw new Error('Not EOF after read all');
-          handle.close();
-        },
-      },
-      {
-        name: 'FileHandle.read() binary',
-        fn: async () => {
-          const handle = fs.open(`${testDir}/hash.txt`, FileOpenMode.Read);
-          const buf = await handle.read(4);
-          handle.close();
-          if (buf.byteLength !== 4)
-            throw new Error(`Length: ${buf.byteLength}`);
-          const str = FS.decodeString(buf);
-          if (str !== 'hash') throw new Error(`Decoded: ${str}`);
-        },
-      },
-      {
-        name: 'FileHandle.write() binary',
-        fn: async () => {
-          const handle = fs.open(
-            `${testDir}/binary_handle.dat`,
-            FileOpenMode.Write
-          );
-          const data = new Uint8Array([0x48, 0x49]).buffer;
-          const written = await handle.write(data);
-          handle.close();
-          if (written !== 2) throw new Error(`Written: ${written}`);
-        },
-        verify: async () => {
-          const bytes = await file(`${testDir}/binary_handle.dat`).readBytes();
-          const arr = new Uint8Array(bytes);
-          if (arr[0] !== 0x48 || arr[1] !== 0x49)
-            throw new Error('Binary verify failed');
-        },
-      },
-      {
-        name: 'FileHandle.flush()',
-        fn: async () => {
-          const handle = fs.open(
-            `${testDir}/flush_test.txt`,
-            FileOpenMode.Write
-          );
-          await handle.writeString('flush');
-          await handle.flush();
-          handle.close();
-        },
-      },
-      {
-        name: 'FileHandle.truncate()',
-        setup: async () => {
-          await file(`${testDir}/truncate.txt`).writeString('Hello World');
-        },
-        fn: async () => {
-          const handle = fs.open(
-            `${testDir}/truncate.txt`,
-            FileOpenMode.ReadWrite
-          );
-          await handle.seek(5, SeekOrigin.Begin);
-          await handle.truncate();
-          handle.close();
-        },
-        verify: async () => {
-          const content = await file(`${testDir}/truncate.txt`).readString();
-          if (content !== 'Hello')
-            throw new Error(`After truncate: ${content}`);
-        },
-      },
-      {
-        name: 'FileHandle append mode',
-        setup: async () => {
-          await file(`${testDir}/append_handle.txt`).writeString('Start');
-        },
-        fn: async () => {
-          const handle = fs.open(
-            `${testDir}/append_handle.txt`,
-            FileOpenMode.Append
-          );
-          await handle.writeString('End');
-          handle.close();
-        },
-        verify: async () => {
-          const content = await file(
-            `${testDir}/append_handle.txt`
-          ).readString();
-          if (content !== 'StartEnd') throw new Error(`Content: ${content}`);
-        },
-      },
-
-      // ==================== FS Utility Tests ====================
-      {
-        name: 'FS.joinPaths()',
-        fn: () => {
-          FS.joinPaths('/a', 'b', 'c.txt');
-        },
-      },
-      {
-        name: 'FS.getAvailableSpace() async',
-        fn: async () => {
-          await FS.getAvailableSpace(tempDir);
-        },
-      },
-      {
-        name: 'FS.getAvailableSpace() sync',
-        fn: () => {
-          FS.getAvailableSpaceSync(tempDir);
-        },
-      },
-      {
-        name: 'FS.getTotalSpace() async',
-        fn: async () => {
-          await FS.getTotalSpace(tempDir);
-        },
-      },
-      {
-        name: 'FS.getTotalSpace() sync',
-        fn: () => {
-          FS.getTotalSpaceSync(tempDir);
-        },
-      },
-      {
-        name: 'FS.decodeString()',
-        fn: () => {
-          const buf = new Uint8Array([72, 101, 108, 108, 111]).buffer;
-          const s = FS.decodeString(buf);
-          if (s !== 'Hello') throw new Error('Decode failed');
-        },
-      },
-      {
-        name: 'FS.encodeString()',
-        fn: () => {
-          const buf = FS.encodeString('Hello');
-          if (new Uint8Array(buf)[0] !== 72) throw new Error('Encode failed');
-        },
-      },
-
-      // ==================== HTTP Tests ====================
-      {
-        name: 'request.get()',
-        fn: async () => {
-          const res = await request.get('https://httpbin.org/get');
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        },
-      },
-      {
-        name: 'request.post()',
-        fn: async () => {
-          const res = await request.post('https://httpbin.org/post', {
-            json: { test: 123 },
-          });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        },
-      },
-    ];
-
-    setResults(tests.map((t) => ({ name: t.name, status: 'pending' })));
-    setRunning(true);
-
-    for (const test of tests) {
-      try {
-        if (test.setup) await test.setup();
-        const start = performance.now();
-        await test.fn();
-        const duration = performance.now() - start;
-        if (test.verify) await test.verify();
-        updateResult(test.name, 'pass', undefined, duration);
-      } catch (e: any) {
-        updateResult(test.name, 'fail', e.message || String(e));
-      }
-    }
-
-    fs.close();
-    setRunning(false);
-  }, []);
-
-  useEffect(() => {
-    runTests();
-  }, [runTests]);
-
-  const passCount = results.filter((r) => r.status === 'pass').length;
-  const failCount = results.filter((r) => r.status === 'fail').length;
-
+export default function App(options: DeviceLaunchOptions) {
+  const [screen, setScreen] = useState<'quality' | 'legacy'>();
+  if (options.ioExampleAction === 'benchmark')
+    return <BenchmarkApp {...options} />;
+  if (options.ioExampleAction === 'quality') return <AutoApp {...options} />;
+  // Choose once per launch, so unmounting cannot leave an active suite behind.
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>react-native-io Tests</Text>
-        <Text style={styles.summary}>
-          ✅ {passCount} | ❌ {failCount} | 📊 {results.length}
-        </Text>
-        <TouchableOpacity
-          style={[styles.button, running && styles.buttonDisabled]}
-          onPress={runTests}
-          disabled={running}
-        >
-          <Text style={styles.buttonText}>
-            {running ? 'Running...' : 'Run Tests'}
+    <SafeAreaView style={styles.container}>
+      <StatusBar barStyle="dark-content" />
+      {screen === 'quality' ? (
+        <QualityPanel />
+      ) : screen === 'legacy' ? (
+        <SmokeApp />
+      ) : (
+        <View style={styles.home}>
+          <Text style={styles.eyebrow}>REACT NATIVE IO</Text>
+          <Text style={styles.title}>原生 I/O 测试实验室</Text>
+          <Text style={styles.description}>
+            在当前设备上验证文件、网络、边界、并发与性能。选择入口后手动开始测试。
           </Text>
-        </TouchableOpacity>
-      </View>
-
-      <ScrollView style={styles.list}>
-        {results.map((r, i) => (
-          <View key={i} style={styles.item}>
-            <Text style={styles.icon}>
-              {r.status === 'pass' ? '✅' : r.status === 'fail' ? '❌' : '⏳'}
+          <TouchableOpacity
+            accessibilityRole="button"
+            onPress={() => setScreen('quality')}
+            style={styles.card}
+          >
+            <Text style={styles.cardTitle}>质量与性能测试 →</Text>
+            <Text style={styles.cardDescription}>
+              Quick / Full / Soak · 逐项结果 · 取消 · 导出报告
             </Text>
-            <View style={styles.itemContent}>
-              <View style={styles.itemHeader}>
-                <Text style={styles.itemName}>{r.name}</Text>
-                {r.duration !== undefined && (
-                  <Text style={styles.duration}>{r.duration.toFixed(2)}ms</Text>
-                )}
-              </View>
-              {r.error && <Text style={styles.error}>{r.error}</Text>}
-            </View>
-          </View>
-        ))}
-      </ScrollView>
-    </View>
+          </TouchableOpacity>
+          <TouchableOpacity
+            accessibilityRole="button"
+            onPress={() => setScreen('legacy')}
+            style={[styles.card, styles.secondaryCard]}
+          >
+            <Text style={styles.cardTitle}>原始 API 示例 →</Text>
+            <Text style={styles.cardDescription}>
+              文件、目录、句柄与请求的基础冒烟测试
+            </Text>
+          </TouchableOpacity>
+          <Text style={styles.note}>重新打开 App 可重新选择测试入口。</Text>
+        </View>
+      )}
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f5f5f5' },
-  header: {
+  container: { flex: 1, backgroundColor: '#f3f6fb' },
+  home: { flex: 1, justifyContent: 'center', padding: 24 },
+  eyebrow: {
+    color: '#375ed3',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 2,
+  },
+  title: { color: '#17243d', fontSize: 28, fontWeight: '700', marginTop: 12 },
+  description: {
+    color: '#53627a',
+    fontSize: 15,
+    lineHeight: 24,
+    marginVertical: 20,
+  },
+  card: {
     padding: 20,
-    paddingTop: 50,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
+    borderRadius: 16,
+    backgroundColor: '#dfe9ff',
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: '#bacffc',
   },
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 10,
+  secondaryCard: { backgroundColor: '#fff', borderColor: '#dce3ee' },
+  cardTitle: { color: '#17243d', fontSize: 18, fontWeight: '600' },
+  cardDescription: {
+    color: '#53627a',
+    fontSize: 13,
+    lineHeight: 21,
+    marginTop: 8,
   },
-  summary: { fontSize: 18, color: '#666', marginBottom: 15 },
-  button: {
-    backgroundColor: '#007AFF',
-    paddingHorizontal: 30,
-    paddingVertical: 12,
-    borderRadius: 8,
-  },
-  buttonDisabled: { opacity: 0.5 },
-  buttonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
-  list: { flex: 1, padding: 10 },
-  item: {
-    flexDirection: 'row',
-    backgroundColor: '#fff',
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
-  },
-  icon: { fontSize: 18, marginRight: 12 },
-  itemContent: { flex: 1 },
-  itemHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  itemName: { color: '#333', fontSize: 14, flex: 1 },
-  duration: { color: '#4CAF50', fontSize: 12, marginLeft: 8 },
-  error: { color: '#F44336', fontSize: 12, marginTop: 4 },
+  note: { color: '#65738a', fontSize: 12, marginTop: 6 },
 });

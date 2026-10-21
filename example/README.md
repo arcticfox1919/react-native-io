@@ -1,3 +1,9 @@
+# react-native-io example
+
+真实设备的功能、边界、临界值、压力和性能测试入口见 [TESTING.md](TESTING.md)。iOS 与 Android 均有连接真机的构建、运行和报告导出步骤；UI、Harness 和独立打包自动入口共用同一套质量测试场景。
+
+详细优化原理与副作用见 [优化说明](../docs/optimization.md)。
+
 This is a new [**React Native**](https://reactnative.dev) project, bootstrapped using [`@react-native-community/cli`](https://github.com/react-native-community/cli).
 
 # Getting Started

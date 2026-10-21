@@ -26,3 +26,6 @@ set(CRYPTO_HEADERS
 add_library(io_hash STATIC ${CRYPTO_SOURCES} ${CRYPTO_HEADERS})
 
 target_include_directories(io_hash PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+
+# io_hash is linked into the shared native module.
+set_target_properties(io_hash PROPERTIES POSITION_INDEPENDENT_CODE ON)

@@ -24,6 +24,15 @@ export default defineConfig([
     },
   },
   {
+    files: [
+      'example/scripts/*.{cjs,mjs}',
+      'example/tests/**/*.cjs',
+      'eslint.config.mjs',
+      'example/rn-harness.config.mjs',
+    ],
+    languageOptions: { ecmaVersion: 2022 },
+  },
+  {
     ignores: ['node_modules/', 'lib/'],
   },
 ]);

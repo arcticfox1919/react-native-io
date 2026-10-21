@@ -6,7 +6,20 @@ apply plugin: "com.facebook.react"
  * This is the configuration block to customize your React Native Android app.
  * By default you don't need to apply any configuration, just uncomment the lines you need.
  */
+// Standalone device tests embed JS while retaining a debuggable APK for report export.
+// Defaults preserve the normal Metro development workflow.
+def ioExampleStandalone = providers.gradleProperty("ioExampleStandalone").getOrElse("false").toBoolean()
+def ioExampleEntry = providers.gradleProperty("ioExampleEntry").getOrElse("index.js")
+if (!(ioExampleEntry in ["index.js", "index.quality.js"])) {
+    throw new GradleException("Unsupported IoExample entry: " + ioExampleEntry)
+}
+
 react {
+    entryFile = file("../../" + ioExampleEntry)
+    if (ioExampleStandalone) {
+        debuggableVariants = []
+    }
+
     /* Folders */
     //   The root of your project, i.e. where "package.json" lives. Default is '../..'
     // root = file("../../")
@@ -57,7 +70,11 @@ react {
 /**
  * Set this to true to Run Proguard on Release builds to minify the Java bytecode.
  */
-def enableProguardInReleaseBuilds = false
+def enableProguardInReleaseBuilds = providers.gradleProperty("ioExampleMinify").getOrElse("true").toBoolean()
+def ioExampleVariant = providers.gradleProperty("ioExampleVariant").getOrElse("working-tree")
+if (!(ioExampleVariant ==~ /[A-Za-z0-9._-]{1,64}/)) {
+    throw new GradleException("Invalid IoExample variant label")
+}
 
 /**
  * The preferred build flavor of JavaScriptCore (JSC)
@@ -84,6 +101,9 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "1.0"
+        buildConfigField "boolean", "IO_EXAMPLE_STANDALONE", ioExampleStandalone.toString()
+        buildConfigField "boolean", "IO_EXAMPLE_R8", "false"
+        buildConfigField "String", "IO_EXAMPLE_VARIANT", "\"${ioExampleVariant}\""
     }
     signingConfigs {
         debug {
@@ -101,7 +121,10 @@ android {
             // Caution! In production, you need to generate your own keystore file.
             // see https://reactnative.dev/docs/signed-apk-android.
             signingConfig signingConfigs.debug
+            debuggable false
             minifyEnabled enableProguardInReleaseBuilds
+            shrinkResources enableProguardInReleaseBuilds
+            buildConfigField "boolean", "IO_EXAMPLE_R8", enableProguardInReleaseBuilds.toString()
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
         }
     }

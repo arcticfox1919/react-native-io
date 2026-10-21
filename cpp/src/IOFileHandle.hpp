@@ -35,6 +35,10 @@
 #include <stdexcept>
 #include <filesystem>
 #include <cstdio>
+#include <mutex>
+#include <algorithm>
+#include <sys/stat.h>
+#include "IOLimits.hpp"
 
 #ifdef _WIN32
 #include <io.h>
@@ -68,17 +72,77 @@ enum class SeekOrigin : int {
 /**
  * @brief Low-level file handle for streaming operations
  *
- * Uses C FILE* for maximum performance and portability.
+ * Uses buffered C FILE* for file-handle operations.
  * Supports both text and binary operations.
  *
- * @note This class is NOT thread-safe. Each thread should have its own handle.
+ * @note Operations and close are serialized per handle. Concurrent operations
+ * are safe, but callers must await dependent seek/read/write operations for ordering.
  */
 class IOFileHandle {
 private:
+    mutable std::mutex mutex_;
     FILE* file_ = nullptr;
     std::string path_;
     FileOpenMode mode_;
-    int64_t size_ = -1;  // Cached file size, -1 = unknown
+    bool lastWasRead_ = false;
+    bool lastWasWrite_ = false;
+    void prepareRead() {
+        if (lastWasWrite_ && std::fflush(file_) != 0) throw std::runtime_error("Flush before read failed");
+        lastWasWrite_ = false;
+        lastWasRead_ = true;
+    }
+    void prepareWrite() {
+        if (lastWasRead_ && ::fseeko(file_, 0, SEEK_CUR) != 0) throw std::runtime_error("Position before write failed");
+        lastWasRead_ = false;
+        lastWasWrite_ = true;
+    }
+
+    [[nodiscard]] int64_t getSizeUnlocked() {
+        ensureOpen();
+        if (lastWasWrite_ && std::fflush(file_) != 0) throw std::runtime_error("Flush failed");
+        struct stat status;
+        if (::fstat(fileno(file_), &status) != 0) throw std::runtime_error("Cannot get file size");
+        return static_cast<int64_t>(status.st_size);
+    }
+
+    [[nodiscard]] int64_t getPositionUnlocked() const {
+        ensureOpen();
+        auto position = ::ftello(file_);
+        if (position < 0) throw std::runtime_error("Cannot determine file position");
+        return position;
+    }
+
+    [[nodiscard]] std::vector<uint8_t> readUnlocked(int64_t size) {
+        ensureOpen();
+        if (!canRead()) throw std::runtime_error("File not opened for reading");
+        if (size < -1) throw std::invalid_argument("Read size must be -1 or nonnegative");
+        prepareRead();
+        auto currentPos = getPositionUnlocked();
+        auto remaining = std::max<int64_t>(0, getSizeUnlocked() - currentPos);
+        size = size == -1 ? remaining : std::min(size, remaining);
+        checkBufferSize(static_cast<size_t>(size));
+        if (size == 0) return {};
+        std::vector<uint8_t> buffer(static_cast<size_t>(size));
+        auto bytesRead = std::fread(buffer.data(), 1, buffer.size(), file_);
+        if (bytesRead < buffer.size() && std::ferror(file_)) throw std::runtime_error("Read error");
+        buffer.resize(bytesRead);
+        return buffer;
+    }
+
+    size_t writeStringUnlocked(const std::string& content) {
+        ensureOpen();
+        if (!canWrite()) throw std::runtime_error("File not opened for writing");
+        checkBufferSize(content.size());
+        prepareWrite();
+        auto written = std::fwrite(content.data(), 1, content.size(), file_);
+        if (written < content.size()) throw std::runtime_error("Write error");
+        return written;
+    }
+
+    void flushUnlocked() {
+        ensureOpen();
+        if (std::fflush(file_) != 0) throw std::runtime_error("Flush failed");
+    }
 
     /**
      * @brief Convert FileOpenMode to fopen mode string
@@ -137,41 +201,23 @@ public:
     IOFileHandle(const std::string& path, FileOpenMode mode)
         : path_(path), mode_(mode)
     {
+        checkPath(path);
+        if (static_cast<int>(mode) < 0 || static_cast<int>(mode) > 5) throw std::invalid_argument("Invalid file open mode");
         file_ = std::fopen(path.c_str(), getModeString(mode));
         if (!file_) {
             throw std::runtime_error("Cannot open file: " + path);
         }
     }
 
-    ~IOFileHandle() {
-        close();
-    }
+    ~IOFileHandle() noexcept { try { close(); } catch (...) {} }
 
     // Non-copyable
     IOFileHandle(const IOFileHandle&) = delete;
     IOFileHandle& operator=(const IOFileHandle&) = delete;
 
     // Movable
-    IOFileHandle(IOFileHandle&& other) noexcept
-        : file_(other.file_)
-        , path_(std::move(other.path_))
-        , mode_(other.mode_)
-        , size_(other.size_)
-    {
-        other.file_ = nullptr;
-    }
-
-    IOFileHandle& operator=(IOFileHandle&& other) noexcept {
-        if (this != &other) {
-            close();
-            file_ = other.file_;
-            path_ = std::move(other.path_);
-            mode_ = other.mode_;
-            size_ = other.size_;
-            other.file_ = nullptr;
-        }
-        return *this;
-    }
+    IOFileHandle(IOFileHandle&& other) = delete;
+    IOFileHandle& operator=(IOFileHandle&& other) = delete;
 
     // ========================================================================
     // Properties
@@ -188,34 +234,25 @@ public:
      * @brief Check if file is open
      */
     [[nodiscard]] auto isOpen() const -> bool {
+        std::lock_guard<std::mutex> lock(mutex_);
         return file_ != nullptr;
     }
 
     /**
      * @brief Get file size
-     * @note Caches the result after first call
+     * @note Queries the open file descriptor on every call
      */
     [[nodiscard]] auto getSize() -> int64_t {
-        ensureOpen();
-
-        if (size_ < 0) {
-            // Save current position
-            auto currentPos = std::ftell(file_);
-            // Seek to end
-            std::fseek(file_, 0, SEEK_END);
-            size_ = std::ftell(file_);
-            // Restore position
-            std::fseek(file_, currentPos, SEEK_SET);
-        }
-        return size_;
+        std::lock_guard<std::mutex> lock(mutex_);
+        return getSizeUnlocked();
     }
 
     /**
      * @brief Get current file position
      */
     [[nodiscard]] auto getPosition() const -> int64_t {
-        ensureOpen();
-        return std::ftell(file_);
+        std::lock_guard<std::mutex> lock(mutex_);
+        return getPositionUnlocked();
     }
 
     /**
@@ -224,11 +261,12 @@ public:
      *       after reading all content (feof only triggers after a failed read)
      */
     [[nodiscard]] auto isEOF() -> bool {
+        std::lock_guard<std::mutex> lock(mutex_);
         ensureOpen();
         // feof() only returns true after attempting to read past EOF
         // So we compare current position with file size for accurate detection
-        auto currentPos = std::ftell(file_);
-        auto fileSize = getSize();
+        auto currentPos = getPositionUnlocked();
+        auto fileSize = getSizeUnlocked();
         return currentPos >= fileSize;
     }
 
@@ -243,6 +281,7 @@ public:
      * @return New position
      */
     auto seek(int64_t offset, SeekOrigin origin = SeekOrigin::Begin) -> int64_t {
+        std::lock_guard<std::mutex> lock(mutex_);
         ensureOpen();
 
         int whence;
@@ -250,22 +289,27 @@ public:
             case SeekOrigin::Begin:   whence = SEEK_SET; break;
             case SeekOrigin::Current: whence = SEEK_CUR; break;
             case SeekOrigin::End:     whence = SEEK_END; break;
-            default: whence = SEEK_SET;
+            default: throw std::invalid_argument("Invalid seek origin");
         }
 
-        if (std::fseek(file_, static_cast<long>(offset), whence) != 0) {
+        if (::fseeko(file_, static_cast<off_t>(offset), whence) != 0) {
             throw std::runtime_error("Seek failed");
         }
 
-        return std::ftell(file_);
+        lastWasRead_ = lastWasWrite_ = false;
+        auto position = ::ftello(file_);
+        if (position < 0) throw std::runtime_error("Cannot determine file position");
+        return position;
     }
 
     /**
      * @brief Rewind to beginning of file
      */
     auto rewind() -> void {
+        std::lock_guard<std::mutex> lock(mutex_);
         ensureOpen();
         std::rewind(file_);
+        lastWasRead_ = lastWasWrite_ = false;
     }
 
     // ========================================================================
@@ -278,29 +322,8 @@ public:
      * @return Bytes read
      */
     [[nodiscard]] auto read(int64_t size = -1) -> std::vector<uint8_t> {
-        ensureOpen();
-        if (!canRead()) {
-            throw std::runtime_error("File not opened for reading");
-        }
-
-        if (size < 0) {
-            // Read all remaining
-            auto currentPos = std::ftell(file_);
-            std::fseek(file_, 0, SEEK_END);
-            auto endPos = std::ftell(file_);
-            std::fseek(file_, currentPos, SEEK_SET);
-            size = endPos - currentPos;
-        }
-
-        std::vector<uint8_t> buffer(static_cast<size_t>(size));
-        auto bytesRead = std::fread(buffer.data(), 1, buffer.size(), file_);
-
-        if (bytesRead < buffer.size() && std::ferror(file_)) {
-            throw std::runtime_error("Read error");
-        }
-
-        buffer.resize(bytesRead);
-        return buffer;
+        std::lock_guard<std::mutex> lock(mutex_);
+        return readUnlocked(size);
     }
 
     /**
@@ -309,7 +332,8 @@ public:
      * @return String content
      */
     [[nodiscard]] auto readString(int64_t size = -1) -> std::string {
-        auto bytes = read(size);
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto bytes = readUnlocked(size);
         return std::string(bytes.begin(), bytes.end());
     }
 
@@ -319,22 +343,27 @@ public:
      * @return Line content (without newline), empty string at EOF
      */
     [[nodiscard]] auto readLine(size_t maxLength = 65536) -> std::string {
+        std::lock_guard<std::mutex> lock(mutex_);
         ensureOpen();
         if (!canRead()) {
             throw std::runtime_error("File not opened for reading");
         }
 
+        checkBufferSize(maxLength);
+        prepareRead();
         std::string line;
-        line.reserve(256);
-
-        int ch;
-        while ((ch = std::fgetc(file_)) != EOF && line.size() < maxLength) {
-            if (ch == '\n') {
+        line.reserve(std::min<size_t>(maxLength, 256));
+        while (line.size() < maxLength) {
+            int ch = getc_unlocked(file_);
+            if (ch == EOF) {
+                if (std::ferror(file_)) throw std::runtime_error("Read line failed");
                 break;
             }
-            if (ch != '\r') {  // Skip CR in CRLF
-                line.push_back(static_cast<char>(ch));
+            if (ch == '\n') {
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                break;
             }
+            line.push_back(static_cast<char>(ch));
         }
 
         return line;
@@ -350,18 +379,19 @@ public:
      * @return Number of bytes written
      */
     auto write(const std::vector<uint8_t>& data) -> size_t {
+        std::lock_guard<std::mutex> lock(mutex_);
         ensureOpen();
         if (!canWrite()) {
             throw std::runtime_error("File not opened for writing");
         }
 
+        checkBufferSize(data.size());
+        prepareWrite();
         auto written = std::fwrite(data.data(), 1, data.size(), file_);
         if (written < data.size()) {
             throw std::runtime_error("Write error");
         }
 
-        // Invalidate cached size
-        size_ = -1;
 
         return written;
     }
@@ -372,20 +402,8 @@ public:
      * @return Number of bytes written
      */
     auto writeString(const std::string& content) -> size_t {
-        ensureOpen();
-        if (!canWrite()) {
-            throw std::runtime_error("File not opened for writing");
-        }
-
-        auto written = std::fwrite(content.data(), 1, content.size(), file_);
-        if (written < content.size()) {
-            throw std::runtime_error("Write error");
-        }
-
-        // Invalidate cached size
-        size_ = -1;
-
-        return written;
+        std::lock_guard<std::mutex> lock(mutex_);
+        return writeStringUnlocked(content);
     }
 
     /**
@@ -394,8 +412,9 @@ public:
      * @return Number of bytes written (including newline)
      */
     auto writeLine(const std::string& line) -> size_t {
-        auto written = writeString(line);
-        written += writeString("\n");
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto written = writeStringUnlocked(line);
+        written += writeStringUnlocked("\n");
         return written;
     }
 
@@ -407,10 +426,8 @@ public:
      * @brief Flush buffered data to disk
      */
     auto flush() -> void {
-        ensureOpen();
-        if (std::fflush(file_) != 0) {
-            throw std::runtime_error("Flush failed");
-        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        flushUnlocked();
     }
 
     /**
@@ -418,13 +435,14 @@ public:
      * @note Platform-specific, may not work on all systems
      */
     auto truncate() -> void {
+        std::lock_guard<std::mutex> lock(mutex_);
         ensureOpen();
         if (!canWrite()) {
             throw std::runtime_error("File not opened for writing");
         }
 
-        flush();
-        auto pos = std::ftell(file_);
+        flushUnlocked();
+        auto pos = ::ftello(file_);
 
 #ifdef _WIN32
         if (_chsize_s(_fileno(file_), pos) != 0) {
@@ -436,17 +454,17 @@ public:
         }
 #endif
 
-        // Invalidate cached size
-        size_ = -1;
     }
 
     /**
      * @brief Close the file handle
      */
     auto close() -> void {
+        std::lock_guard<std::mutex> lock(mutex_);
         if (file_) {
-            std::fclose(file_);
+            auto file = file_;
             file_ = nullptr;
+            if (std::fclose(file) != 0) throw std::runtime_error("Close failed (buffered write may have failed)");
         }
     }
 };

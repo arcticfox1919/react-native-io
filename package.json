@@ -1,7 +1,7 @@
 {
   "name": "react-native-io",
-  "version": "0.1.4",
-  "description": "The missing I/O library for React Native — files, network, and hashing in one blazing-fast C++ package.",
+  "version": "0.1.5",
+  "description": "File, network and hashing APIs for React Native using C++/JSI and platform HTTP backends.",
   "main": "./lib/module/index.js",
   "types": "./lib/typescript/src/index.d.ts",
   "exports": {
@@ -39,7 +39,13 @@
     "typecheck": "tsc",
     "lint": "eslint \"**/*.{js,ts,tsx}\"",
     "test": "jest",
-    "release": "release-it --only-version"
+    "release": "release-it --only-version",
+    "test:native": "yarn example test:native",
+    "test:wrappers": "yarn example test:wrappers",
+    "test:android-http": "yarn example test:android-http",
+    "test:apple-http": "yarn example test:apple-http",
+    "bench:hash": "yarn example bench:hash",
+    "test:example-engine": "yarn example test:engine"
   },
   "keywords": [
     "react-native",

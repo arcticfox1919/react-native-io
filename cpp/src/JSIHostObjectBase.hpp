@@ -32,6 +32,12 @@
 #define JSI_HOST_OBJECT_BASE_HPP
 
 #include <jsi/jsi.h>
+#include "JSIBuffer.hpp"
+#include "IOLimits.hpp"
+#include "AsyncPayloadBudget.hpp"
+#include "JSIRuntimeState.hpp"
+#include <cmath>
+#include <atomic>
 #include <concepts>
 #include <memory>
 #include <string>
@@ -85,7 +91,33 @@ struct AsyncResult {
     /**
      * @brief Convert AsyncResult to JS Value (must be called on JS thread)
      */
-    Value toJSValue(Runtime& rt) const {
+    size_t payloadBytes() const {
+        return std::visit([](const auto& value) -> size_t {
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, std::string> || std::is_same_v<T, std::vector<uint8_t>>) return value.size();
+            else if constexpr (std::is_same_v<T, std::vector<AsyncResult>>) {
+                size_t total = 0;
+                for (const auto& item : value) {
+                    auto bytes = item.payloadBytes();
+                    if (bytes > rct_io::AsyncPayloadLease::limit - total) throw std::length_error("Async result exceeds payload budget");
+                    total += bytes;
+                }
+                return total;
+            } else if constexpr (std::is_same_v<T, std::unordered_map<std::string, AsyncResult>>) {
+                size_t total = 0;
+                for (const auto& [key, item] : value) {
+                    auto bytes = item.payloadBytes();
+                    if (key.size() > rct_io::AsyncPayloadLease::limit - total) throw std::length_error("Async result exceeds payload budget");
+                    total += key.size();
+                    if (bytes > rct_io::AsyncPayloadLease::limit - total) throw std::length_error("Async result exceeds payload budget");
+                    total += bytes;
+                }
+                return total;
+            } else return 0;
+        }, data);
+    }
+
+    Value toJSValue(Runtime& rt) && {
         return std::visit([&rt](auto&& arg) -> Value {
             using T = std::decay_t<decltype(arg)>;
             if constexpr (std::is_same_v<T, std::monostate>) {
@@ -97,26 +129,21 @@ struct AsyncResult {
             } else if constexpr (std::is_same_v<T, std::string>) {
                 return String::createFromUtf8(rt, arg);
             } else if constexpr (std::is_same_v<T, std::vector<uint8_t>>) {
-                // Create ArrayBuffer and copy data
-                auto arrayBufferCtor = rt.global().getPropertyAsFunction(rt, "ArrayBuffer");
-                auto arrayBufferObj = arrayBufferCtor.callAsConstructor(rt, static_cast<int>(arg.size())).asObject(rt);
-                auto arrayBuffer = arrayBufferObj.getArrayBuffer(rt);
-                memcpy(arrayBuffer.data(rt), arg.data(), arg.size());
-                return std::move(arrayBufferObj);
+                return toArrayBuffer(rt, std::move(arg));
             } else if constexpr (std::is_same_v<T, std::vector<AsyncResult>>) {
                 Array arr(rt, arg.size());
                 for (size_t i = 0; i < arg.size(); ++i) {
-                    arr.setValueAtIndex(rt, i, arg[i].toJSValue(rt));
+                    arr.setValueAtIndex(rt, i, std::move(arg[i]).toJSValue(rt));
                 }
                 return std::move(arr);
             } else if constexpr (std::is_same_v<T, std::unordered_map<std::string, AsyncResult>>) {
                 Object obj(rt);
-                for (const auto& [key, value] : arg) {
-                    obj.setProperty(rt, key.c_str(), value.toJSValue(rt));
+                for (auto& [key, value] : arg) {
+                    obj.setProperty(rt, key.c_str(), std::move(value).toJSValue(rt));
                 }
                 return std::move(obj);
             }
-        }, data);
+        }, std::move(data));
     }
 };
 
@@ -180,13 +207,6 @@ public:
  * Holds both callbacks in a single allocation for async method execution.
  * Must be used on the JS thread only.
  */
-struct PromiseCallbacks {
-    Value resolve;
-    Value reject;
-    PromiseCallbacks(Runtime& rt, const Value& res, const Value& rej)
-        : resolve(rt, res), reject(rt, rej) {}
-};
-
 // ============================================================================
 // Concept: JSIHostObjectDerived
 // ============================================================================
@@ -243,7 +263,7 @@ concept JSIHostObjectDerived = requires(T t) {
  * ```
  */
 template <typename Derived>
-class JSIHostObjectBase : public HostObject {
+class JSIHostObjectBase : public HostObject, public std::enable_shared_from_this<Derived> {
 public:
     // ========================================================================
     // Handler Types
@@ -300,10 +320,33 @@ protected:
     std::shared_ptr<JSCallInvokerWrapper> callInvoker_;
     bool hasAsyncMethods_ = false;
 
-    // Cached JS objects (created lazily, invalidated on runtime change)
-    mutable std::unordered_map<std::string, std::shared_ptr<Object>> cachedFunctions_;
-    mutable std::shared_ptr<Object> cachedPromiseCtor_;
-    mutable Runtime* cachedRuntime_ = nullptr;
+    TaskExecutor* taskExecutor() {
+        if constexpr (requires(Derived& d) { d.getTaskExecutor(); })
+            return static_cast<Derived*>(this)->getTaskExecutor();
+        throw std::runtime_error("No task executor");
+    }
+    const uint64_t hostId_ = nextHostId();
+    std::shared_ptr<void> lifetimeToken_ = std::make_shared<int>(0);
+    inline static std::atomic<size_t> pendingTasks_{0};
+    static constexpr size_t maxPendingTasks_ = 256;
+
+    struct PendingTaskLease {
+        ~PendingTaskLease() { --pendingTasks_; }
+    };
+
+    static std::shared_ptr<PendingTaskLease> acquirePendingTask() {
+        size_t current = pendingTasks_.load();
+        do {
+            if (current >= maxPendingTasks_)
+                throw std::runtime_error("Too many pending I/O operations (limit: 256)");
+        } while (!pendingTasks_.compare_exchange_weak(current, current + 1));
+        try {
+            return std::make_shared<PendingTaskLease>();
+        } catch (...) {
+            --pendingTasks_;
+            throw;
+        }
+    }
 
     // ========================================================================
     // Initialization
@@ -385,7 +428,7 @@ protected:
      * Groups arguments by type for easy access in async handlers.
      * Arrays of strings are flattened into the strings vector.
      */
-    static auto extractArgs(Runtime& rt, const Value* args, size_t count)
+    static auto extractArgs(Runtime& rt, const Value* args, size_t count, rct_io::AsyncPayloadLease& budget)
         -> std::tuple<
             std::vector<std::string>,
             std::vector<double>,
@@ -398,11 +441,23 @@ protected:
         std::vector<bool> bools;
         std::vector<std::vector<uint8_t>> buffers;
 
+        size_t totalBytes = 0;
+        auto addString = [&](std::string text) {
+            if (text.size() > rct_io::maxBufferBytes - totalBytes) throw JSError(rt, "I/O arguments exceed buffer limit");
+            budget.add(text.size());
+            totalBytes += text.size();
+            strings.push_back(std::move(text));
+        };
         for (size_t i = 0; i < count; ++i) {
             if (args[i].isString()) {
-                strings.push_back(args[i].asString(rt).utf8(rt));
+                addString(args[i].asString(rt).utf8(rt));
             } else if (args[i].isNumber()) {
-                numbers.push_back(args[i].asNumber());
+                auto number = args[i].asNumber();
+                if (!std::isfinite(number) || std::floor(number) != number ||
+                    std::abs(number) > 9007199254740991.0) {
+                    throw JSError(rt, "Numeric arguments must be finite safe integers");
+                }
+                numbers.push_back(number);
             } else if (args[i].isBool()) {
                 bools.push_back(args[i].asBool());
             } else if (args[i].isObject()) {
@@ -411,16 +466,19 @@ protected:
                     auto ab = obj.getArrayBuffer(rt);
                     auto* data = ab.data(rt);
                     auto size = ab.size(rt);
-                    buffers.emplace_back(data, data + size);
+                    if (size > rct_io::maxBufferBytes - totalBytes) throw JSError(rt, "I/O arguments exceed buffer limit");
+                    budget.add(size);
+                    totalBytes += size;
+                    buffers.emplace_back();
+                    if (size != 0) buffers.back().assign(data, data + size);
                 } else if (obj.isArray(rt)) {
                     // Flatten string arrays into strings vector
                     auto arr = obj.asArray(rt);
                     auto len = arr.size(rt);
                     for (size_t j = 0; j < len; ++j) {
                         auto elem = arr.getValueAtIndex(rt, j);
-                        if (elem.isString()) {
-                            strings.push_back(elem.asString(rt).utf8(rt));
-                        }
+                        if (!elem.isString()) throw JSError(rt, "Expected an array of strings");
+                        addString(elem.asString(rt).utf8(rt));
                     }
                 }
             }
@@ -440,118 +498,121 @@ public:
     Value get(Runtime& rt, const PropNameID& name) override {
         auto propName = name.utf8(rt);
 
-        // Invalidate cache if runtime changed
-        if (cachedRuntime_ != &rt) {
-            cachedFunctions_.clear();
-            cachedPromiseCtor_.reset();
-            cachedRuntime_ = &rt;
+        auto state = runtimeState(rt);
+        // Weak JSI methods must be destroyed on the JS thread. Prune expired
+        // hosts lazily here instead of posting cleanup work from a destructor
+        // while the RN runtime and CallInvoker may already be tearing down.
+        if ((++state->methodCacheTouches % 64) == 0 || state->methods.size() > 1024) {
+            for (auto it = state->methods.begin(); it != state->methods.end();) {
+                if (it->second.lifetime.expired()) it = state->methods.erase(it);
+                else ++it;
+            }
         }
-
-        // Check if we have a cached function for this method
-        if (auto cacheIt = cachedFunctions_.find(propName); cacheIt != cachedFunctions_.end()) {
-            return Value(rt, *cacheIt->second);
+        auto& hostCache = state->methods[hostId_];
+        hostCache.lifetime = lifetimeToken_;
+        auto& cache = hostCache.methods;
+        if (auto it = cache.find(propName); it != cache.end()) {
+            auto cached = it->second.lock(rt);
+            if (!cached.isUndefined()) return cached;
         }
+        std::weak_ptr<Derived> weakOwner = this->shared_from_this();
+        auto validate = [propName](Runtime& runtime, const Value* args, size_t count) {
+            if constexpr (requires(Derived& d) { d.validateArguments(runtime, propName, args, count); }) {
+                Derived::validateArguments(runtime, propName, args, count);
+            }
+        };
 
-        // Sync method lookup
         if (auto it = syncMethods_.find(propName); it != syncMethods_.end()) {
-            const auto& method = it->second;
-            auto func = Function::createFromHostFunction(
-                rt,
-                PropNameID::forUtf8(rt, propName),
-                method.paramCount,
-                [handler = method.handler](Runtime& runtime, const Value&, const Value* args, size_t count) -> Value {
+            auto func = Function::createFromHostFunction(rt, PropNameID::forUtf8(rt, propName),
+                it->second.paramCount,
+                [weakOwner, handler = it->second.handler, validate, propName](Runtime& runtime, const Value&, const Value* args, size_t count) -> Value {
+                    auto owner = weakOwner.lock();
+                    if (!owner) throw JSError(runtime, "I/O context has been released");
                     try {
+                        if constexpr (requires(Derived& d) { d.validateLifecycle(propName); })
+                            owner->validateLifecycle(propName);
+                        validate(runtime, args, count);
                         return handler(runtime, args, count);
                     } catch (const std::exception& e) {
                         throw JSError(runtime, e.what());
                     }
-                }
-            );
-            // Cache the function
-            auto cached = std::make_shared<Object>(std::move(func));
-            cachedFunctions_[propName] = cached;
-            return Value(rt, *cached);
+                });
+            cache.insert_or_assign(propName, WeakObject(rt, func));
+            return func;
         }
 
-        // Async method lookup
         if (auto it = asyncMethods_.find(propName); it != asyncMethods_.end()) {
-            const auto& method = it->second;
-            auto invoker = callInvoker_;
-
-            // Get task executor from derived class (required for async methods)
-            TaskExecutor* executor = nullptr;
-            if constexpr (requires(Derived& d) { d.getTaskExecutor(); }) {
-                executor = static_cast<Derived*>(this)->getTaskExecutor();
-            }
-
-            auto func = Function::createFromHostFunction(
-                rt,
-                PropNameID::forUtf8(rt, propName),
-                method.paramCount,
-                [handler = method.handler, invoker, executor, this](
-                    Runtime& runtime, const Value&, const Value* args, size_t count
-                ) -> Value {
-                    // Extract args on JS thread (safe)
-                    auto [strings, numbers, bools, buffers] = extractArgs(runtime, args, count);
-
-                    // Get cached Promise constructor
-                    if (!cachedPromiseCtor_) {
-                        cachedPromiseCtor_ = std::make_shared<Object>(
-                            runtime.global().getPropertyAsFunction(runtime, "Promise")
-                        );
-                    }
-
-                    auto promiseExecutor = Function::createFromHostFunction(
-                        runtime,
-                        PropNameID::forUtf8(runtime, "executor"),
-                        2,
-                        [handler, invoker, executor,
-                         strings = std::move(strings),
-                         numbers = std::move(numbers),
-                         bools = std::move(bools),
-                         buffers = std::move(buffers)](
-                            Runtime& rt, const Value&, const Value* promiseArgs, size_t
-                        ) mutable -> Value {
-                            // Use single allocation for both callbacks
-                            auto callbacks = std::make_shared<PromiseCallbacks>(rt, promiseArgs[0], promiseArgs[1]);
-
-                            // Execute handler on worker thread
-                            executor->execute([handler, invoker, callbacks,
-                                               strings = std::move(strings),
-                                               numbers = std::move(numbers),
-                                               bools = std::move(bools),
-                                               buffers = std::move(buffers)]() mutable {
+            auto func = Function::createFromHostFunction(rt, PropNameID::forUtf8(rt, propName),
+                it->second.paramCount,
+                [weakOwner, handler = it->second.handler, validate, propName](Runtime& runtime, const Value&, const Value* args, size_t count) -> Value {
+                    try {
+                        auto owner = weakOwner.lock();
+                        if (!owner) throw JSError(runtime, "I/O context has been released");
+                        if constexpr (requires(Derived& d) { d.validateLifecycle(propName); })
+                            owner->validateLifecycle(propName);
+                        validate(runtime, args, count);
+                        // This counter is shared by every HostObject of the same
+                        // native type and is released only when the JS callback
+                        // runs or is discarded by a torn-down CallInvoker.
+                        auto pendingTask = acquirePendingTask();
+                        auto inputBudget = std::make_shared<rct_io::AsyncPayloadLease>(rct_io::AsyncPayloadLease::Kind::Input);
+                        auto [strings, numbers, bools, buffers] = extractArgs(runtime, args, count, *inputBudget);
+                        if constexpr (requires { Derived::appendArgumentMetadata(runtime, propName, args, numbers); })
+                            Derived::appendArgumentMetadata(runtime, propName, args, numbers);
+                        auto state = runtimeState(runtime);
+                        auto& promise = *state->promiseConstructor;
+                        auto executor = Function::createFromHostFunction(runtime, PropNameID::forAscii(runtime, "executor"), 2,
+                            [owner, handler, state, pendingTask = std::move(pendingTask), inputBudget = std::move(inputBudget), strings = std::move(strings), numbers = std::move(numbers),
+                             bools = std::move(bools), buffers = std::move(buffers)]
+                            (Runtime& rt, const Value&, const Value* callbacks, size_t) mutable -> Value {
+                                auto id = state->nextPromise++;
+                                state->pending.emplace(id, std::make_unique<PromiseCallbacks>(rt, callbacks[0], callbacks[1]));
+                                std::weak_ptr<RuntimeState> weak = state;
                                 try {
-                                    // Run handler on worker thread (pure C++ computation, no Runtime)
-                                    AsyncResult result = handler(strings, numbers, bools, buffers);
-
-                                    // Return to JS thread to create JS values and resolve
-                                    invoker->invokeAsync([callbacks, result = std::move(result)](Runtime& rt) mutable {
-                                        Value jsValue = result.toJSValue(rt);
-                                        callbacks->resolve.asObject(rt).asFunction(rt).call(rt, std::move(jsValue));
+                                    owner->taskExecutor()->execute([owner, handler, weak, id, pendingTask = std::move(pendingTask), inputBudget = std::move(inputBudget),
+                                        strings = std::move(strings), numbers = std::move(numbers),
+                                        bools = std::move(bools), buffers = std::move(buffers)]() mutable {
+                                        AsyncResult result;
+                                        std::string error;
+                                        auto outputBudget = std::make_shared<rct_io::AsyncPayloadLease>(rct_io::AsyncPayloadLease::Kind::Output);
+                                        try {
+                                            result = handler(strings, numbers, bools, buffers);
+                                            outputBudget->add(result.payloadBytes());
+                                        } catch (const std::exception& e) { result = AsyncResult{}; error = e.what(); }
+                                          catch (...) { result = AsyncResult{}; error = "Unknown native I/O error"; }
+                                        strings.clear(); buffers.clear();
+                                        inputBudget.reset();
+                                        owner->callInvoker_->invokeAsync([owner, weak, id, pendingTask = std::move(pendingTask), outputBudget = std::move(outputBudget), result = std::move(result), error = std::move(error)](Runtime& js) mutable {
+                                            auto state = weak.lock();
+                                            if (!state) return; // Runtime was destroyed; no stale Runtime/JSI handles.
+                                            auto it = state->pending.find(id);
+                                            if (it == state->pending.end()) return;
+                                            auto callbacks = std::move(it->second);
+                                            state->pending.erase(it);
+                                            if (!error.empty()) {
+                                                callbacks->reject.asObject(js).asFunction(js).call(js, String::createFromUtf8(js, error));
+                                                return;
+                                            }
+                                            try {
+                                                auto value = std::move(result).toJSValue(js);
+                                                callbacks->resolve.asObject(js).asFunction(js).call(js, std::move(value));
+                                            } catch (const std::exception& e) {
+                                                callbacks->reject.asObject(js).asFunction(js).call(js, String::createFromUtf8(js, e.what()));
+                                            }
+                                        });
                                     });
                                 } catch (const std::exception& e) {
-                                    std::string errorMsg = e.what();
-                                    // Return to JS thread to reject
-                                    invoker->invokeAsync([callbacks, errorMsg = std::move(errorMsg)](Runtime& rt) {
-                                        callbacks->reject.asObject(rt).asFunction(rt).call(
-                                            rt, String::createFromUtf8(rt, errorMsg)
-                                        );
-                                    });
+                                    state->pending.erase(id);
+                                    throw JSError(rt, e.what());
                                 }
+                                return Value::undefined();
                             });
-
-                            return Value::undefined();
-                        }
-                    );
-
-                    return cachedPromiseCtor_->asFunction(runtime).callAsConstructor(runtime, promiseExecutor);
-                }
-            );
-            // Cache the function
-            auto cached = std::make_shared<Object>(std::move(func));
-            cachedFunctions_[propName] = cached;
-            return Value(rt, *cached);
+                        return promise.callAsConstructor(runtime, executor);
+                    } catch (const JSError&) { throw; }
+                      catch (const std::exception& e) { throw JSError(runtime, e.what()); }
+                });
+            cache.insert_or_assign(propName, WeakObject(rt, func));
+            return func;
         }
 
         // Property lookup
@@ -654,32 +715,32 @@ public:
 
 // Required argument macros
 #ifndef JSI_S_ARG
-#define JSI_S_ARG(idx) jsiStrArgs[idx]
+#define JSI_S_ARG(idx) jsiStrArgs.at(idx)
 #endif
 
 #ifndef JSI_N_ARG
-#define JSI_N_ARG(idx) jsiNumArgs[idx]
+#define JSI_N_ARG(idx) jsiNumArgs.at(idx)
 #endif
 
 #ifndef JSI_B_ARG
-#define JSI_B_ARG(idx) jsiBoolArgs[idx]
+#define JSI_B_ARG(idx) jsiBoolArgs.at(idx)
 #endif
 
 #ifndef JSI_BUF_ARG
-#define JSI_BUF_ARG(idx) jsiBufArgs[idx]
+#define JSI_BUF_ARG(idx) jsiBufArgs.at(idx)
 #endif
 
 // Optional argument macros with default value
 #ifndef JSI_S_OPT
-#define JSI_S_OPT(idx, def) (jsiStrArgs.size() > (idx) ? jsiStrArgs[idx] : (def))
+#define JSI_S_OPT(idx, def) (jsiStrArgs.size() > (idx) ? jsiStrArgs.at(idx) : (def))
 #endif
 
 #ifndef JSI_N_OPT
-#define JSI_N_OPT(idx, def) (jsiNumArgs.size() > (idx) ? jsiNumArgs[idx] : (def))
+#define JSI_N_OPT(idx, def) (jsiNumArgs.size() > (idx) ? jsiNumArgs.at(idx) : (def))
 #endif
 
 #ifndef JSI_B_OPT
-#define JSI_B_OPT(idx, def) (jsiBoolArgs.size() > (idx) ? jsiBoolArgs[idx] : (def))
+#define JSI_B_OPT(idx, def) (jsiBoolArgs.size() > (idx) ? jsiBoolArgs.at(idx) : (def))
 #endif
 
 // ----------------------------------------------------------------------------

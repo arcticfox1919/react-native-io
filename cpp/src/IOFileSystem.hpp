@@ -41,6 +41,9 @@
 #include <chrono>
 #include <optional>
 #include <variant>
+#include <array>
+#include "IOLimits.hpp"
+#include "AtomicFileWriter.hpp"
 
 // Hash algorithms
 #include "md5.h"
@@ -74,6 +77,8 @@ enum class EntityType : int {
 enum class WriteMode : int {
     Overwrite = 0,   // Truncate and write
     Append = 1,      // Append to existing
+    Atomic = 2,      // Replace via a sibling staging file
+    AtomicDurable = 3, // Atomic + file and parent-directory fsync
 };
 
 /**
@@ -142,11 +147,8 @@ namespace detail {
  */
 [[nodiscard]] inline auto toMilliseconds(const fs::file_time_type& fileTime) -> int64_t {
     // Portable conversion without clock_cast (not available in Android NDK)
-    auto duration = fileTime.time_since_epoch();
-    auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
-    // Adjust for file_clock epoch difference from system_clock (Unix epoch)
-    // file_clock epoch is typically different, we approximate by using the duration directly
-    return millis;
+    const auto systemTime = fs::file_time_type::clock::to_sys(fileTime);
+    return std::chrono::duration_cast<std::chrono::milliseconds>(systemTime.time_since_epoch()).count();
 }
 
 /**
@@ -175,7 +177,7 @@ inline auto ensureParentDirectory(const fs::path& path) -> void {
     if (auto parent = path.parent_path(); !parent.empty()) {
         std::error_code ec;
         fs::create_directories(parent, ec);
-        // Ignore error - parent might already exist
+        if (ec) throw fs::filesystem_error("Cannot create parent directory", parent, ec);
     }
 }
 
@@ -288,44 +290,26 @@ public:
      * @brief Read entire file as UTF-8 string
      */
     [[nodiscard]] auto readString(const std::string& path) const -> std::string {
-        std::ifstream file(path, std::ios::binary);
-        if (!file) {
-            throw std::runtime_error("Cannot open file for reading: " + path);
-        }
-
-        std::ostringstream buffer;
-        buffer << file.rdbuf();
-
-        if (file.bad()) {
-            throw std::runtime_error("Error reading file: " + path);
-        }
-
-        return buffer.str();
+        auto bytes = readBytes(path);
+        return std::string(bytes.begin(), bytes.end());
     }
 
     /**
      * @brief Read entire file as binary data
      */
     [[nodiscard]] auto readBytes(const std::string& path) const -> std::vector<uint8_t> {
+        checkPath(path);
         std::ifstream file(path, std::ios::binary | std::ios::ate);
-        if (!file) {
-            throw std::runtime_error("Cannot open file for reading: " + path);
-        }
-
-        auto fileSize = file.tellg();
-        if (fileSize < 0) {
-            throw std::runtime_error("Cannot determine file size: " + path);
-        }
-
-        file.seekg(0, std::ios::beg);
-
-        std::vector<uint8_t> buffer(static_cast<size_t>(fileSize));
-        file.read(reinterpret_cast<char*>(buffer.data()), fileSize);
-
-        if (file.bad()) {
-            throw std::runtime_error("Error reading file: " + path);
-        }
-
+        if (!file) throw std::runtime_error("Cannot open file for reading: " + path);
+        auto end = file.tellg();
+        if (end < 0) throw std::runtime_error("Cannot determine file size: " + path);
+        checkBufferSize(static_cast<size_t>(end));
+        file.seekg(0);
+        std::vector<uint8_t> buffer(static_cast<size_t>(end));
+        if (!buffer.empty()) file.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
+        if (file.bad()) throw std::runtime_error("Error reading file: " + path);
+        // A concurrent truncation must not turn the missing tail into zero bytes.
+        if (!buffer.empty()) buffer.resize(static_cast<size_t>(file.gcount()));
         return buffer;
     }
 
@@ -346,9 +330,17 @@ public:
         WriteMode mode = WriteMode::Overwrite,
         bool createParents = false
     ) -> void {
+        checkBufferSize(content.size());
+        checkPath(path);
         if (createParents) {
             detail::ensureParentDirectory(path);
         }
+
+        if (mode == WriteMode::Atomic || mode == WriteMode::AtomicDurable) {
+            detail::atomicWrite(path, reinterpret_cast<const uint8_t*>(content.data()), content.size(), mode == WriteMode::AtomicDurable);
+            return;
+        }
+        if (mode != WriteMode::Overwrite && mode != WriteMode::Append) throw std::invalid_argument("Invalid write mode");
 
         auto openMode = std::ios::binary | std::ios::out;
         if (mode == WriteMode::Append) {
@@ -367,6 +359,8 @@ public:
         if (!file) {
             throw std::runtime_error("Failed to write to file: " + path);
         }
+        file.close();
+        if (!file) throw std::runtime_error("Failed to close written file: " + path);
     }
 
     /**
@@ -378,9 +372,17 @@ public:
         WriteMode mode = WriteMode::Overwrite,
         bool createParents = false
     ) -> void {
+        checkBufferSize(data.size());
+        checkPath(path);
         if (createParents) {
             detail::ensureParentDirectory(path);
         }
+
+        if (mode == WriteMode::Atomic || mode == WriteMode::AtomicDurable) {
+            detail::atomicWrite(path, data.data(), data.size(), mode == WriteMode::AtomicDurable);
+            return;
+        }
+        if (mode != WriteMode::Overwrite && mode != WriteMode::Append) throw std::invalid_argument("Invalid write mode");
 
         auto openMode = std::ios::binary | std::ios::out;
         if (mode == WriteMode::Append) {
@@ -402,6 +404,8 @@ public:
         if (!file) {
             throw std::runtime_error("Failed to write bytes to file: " + path);
         }
+        file.close();
+        if (!file) throw std::runtime_error("Failed to close written file: " + path);
     }
 
     // ========================================================================
@@ -414,11 +418,12 @@ public:
      * @param createParents Create parent directories if needed
      */
     auto createFile(const std::string& path, bool createParents = false) -> void {
+        checkPath(path);
         if (createParents) {
             detail::ensureParentDirectory(path);
         }
 
-        std::ofstream file(path);
+        std::ofstream file(path, std::ios::app);
         if (!file) {
             throw std::runtime_error("Failed to create file: " + path);
         }
@@ -429,8 +434,11 @@ public:
      * @returns true if file was deleted, false if it didn't exist
      */
     auto deleteFile(const std::string& path) -> bool {
+        checkPath(path);
         std::error_code ec;
-        return fs::remove(path, ec);
+        bool removed = fs::remove(path, ec);
+        if (ec) throw fs::filesystem_error("Cannot delete file", path, ec);
+        return removed;
     }
 
     /**
@@ -707,63 +715,60 @@ public:
         const std::string& path,
         HashAlgorithm algorithm = HashAlgorithm::SHA256
     ) const -> std::string {
-        auto content = readBytes(path);
-        const void* data = content.data();
-        size_t numBytes = content.size();
+        checkPath(path);
+        auto hashFile = [&path](auto hasher) {
+            std::ifstream file(path, std::ios::binary);
+            if (!file) throw std::runtime_error("Cannot open file for hashing: " + path);
+            std::array<char, 64 * 1024> chunk;
+            while (file) {
+                file.read(chunk.data(), chunk.size());
+                auto count = file.gcount();
+                if (count > 0) hasher.add(chunk.data(), static_cast<size_t>(count));
+            }
+            if (file.bad()) throw std::runtime_error("Cannot read file for hashing: " + path);
+            return hasher.getHash();
+        };
 
         switch (algorithm) {
             case HashAlgorithm::MD5: {
-                MD5 hasher;
-                return hasher(data, numBytes);
+                return hashFile(MD5{});
             }
             case HashAlgorithm::SHA1: {
-                SHA1 hasher;
-                return hasher(data, numBytes);
+                return hashFile(SHA1{});
             }
             case HashAlgorithm::SHA256: {
-                SHA256 hasher;
-                return hasher(data, numBytes);
+                return hashFile(SHA256{});
             }
             case HashAlgorithm::SHA3_224: {
-                SHA3 hasher(SHA3::Bits224);
-                return hasher(data, numBytes);
+                return hashFile(SHA3(SHA3::Bits224));
             }
             case HashAlgorithm::SHA3_256: {
-                SHA3 hasher(SHA3::Bits256);
-                return hasher(data, numBytes);
+                return hashFile(SHA3(SHA3::Bits256));
             }
             case HashAlgorithm::SHA3_384: {
-                SHA3 hasher(SHA3::Bits384);
-                return hasher(data, numBytes);
+                return hashFile(SHA3(SHA3::Bits384));
             }
             case HashAlgorithm::SHA3_512: {
-                SHA3 hasher(SHA3::Bits512);
-                return hasher(data, numBytes);
+                return hashFile(SHA3(SHA3::Bits512));
             }
             case HashAlgorithm::Keccak224: {
-                Keccak hasher(Keccak::Keccak224);
-                return hasher(data, numBytes);
+                return hashFile(Keccak(Keccak::Keccak224));
             }
             case HashAlgorithm::Keccak256: {
-                Keccak hasher(Keccak::Keccak256);
-                return hasher(data, numBytes);
+                return hashFile(Keccak(Keccak::Keccak256));
             }
             case HashAlgorithm::Keccak384: {
-                Keccak hasher(Keccak::Keccak384);
-                return hasher(data, numBytes);
+                return hashFile(Keccak(Keccak::Keccak384));
             }
             case HashAlgorithm::Keccak512: {
-                Keccak hasher(Keccak::Keccak512);
-                return hasher(data, numBytes);
+                return hashFile(Keccak(Keccak::Keccak512));
             }
             case HashAlgorithm::CRC32: {
-                CRC32 hasher;
-                return hasher(data, numBytes);
+                return hashFile(CRC32{});
             }
             default:
                 // Fallback to SHA256
-                SHA256 hasher;
-                return hasher(data, numBytes);
+                return hashFile(SHA256{});
         }
     }
 

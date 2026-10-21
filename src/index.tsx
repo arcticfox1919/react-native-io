@@ -2,7 +2,7 @@
  * @file index.tsx
  * @description React Native IO library - Dart dart:io style file system API
  *
- * A high-performance file system library for React Native using pure C++ and JSI.
+ * File system APIs for React Native using C++ and JSI.
  * Provides File and Directory classes similar to Dart's dart:io library.
  *
  * All I/O operations have both async (Promise-based) and sync variants.
@@ -187,12 +187,13 @@ export const FS = {
   },
 
   /**
-   * Document directory path (for user-visible files)
+   * Document directory path (for persistent application files)
    * - iOS: <App>/Documents (backed up by iCloud)
-   * - Android: /data/data/<pkg>/files
+   * - Android: /data/data/<pkg>/files (internal app storage)
    */
   get documentDir(): string {
-    return _getPlatform().documentsDir;
+    const p = _getPlatform();
+    return p.platform === IOPlatformType.Android ? p.filesDir : p.documentsDir;
   },
 
   /**

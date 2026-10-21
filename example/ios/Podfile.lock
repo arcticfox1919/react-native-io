@@ -8,7 +8,7 @@ PODS:
   - hermes-engine (0.14.0):
     - hermes-engine/Pre-built (= 0.14.0)
   - hermes-engine/Pre-built (0.14.0)
-  - Io (0.1.0):
+  - Io (0.1.4):
     - boost
     - DoubleConversion
     - fast_float
@@ -2732,8 +2732,8 @@ SPEC CHECKSUMS:
   FBLazyVector: a293a88992c4c33f0aee184acab0b64a08ff9458
   fmt: a40bb5bd0294ea969aaaba240a927bd33d878cdd
   glog: 5683914934d5b6e4240e497e0f4a3b42d1854183
-  hermes-engine: 7b761a9d73bf3eb6660a4e0f97dc5049d0e9f9b5
-  Io: 454c72755abe8c7a16842c7c5e021d55219ea8fd
+  hermes-engine: 5d933f78a9e845c7fce39df0f2ee9dc54b61985f
+  Io: 6e5ecc9f789ee1c07db28f0dc215ad091054a5c8
   RCT-Folly: 846fda9475e61ec7bcbf8a3fe81edfcaeb090669
   RCTDeprecation: 2b70c6e3abe00396cefd8913efbf6a2db01a2b36
   RCTRequired: f3540eee8094231581d40c5c6d41b0f170237a81

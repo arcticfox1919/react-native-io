@@ -42,7 +42,7 @@ let httpClientInstalled = false;
 export interface RequestOptions {
   /** Request headers */
   headers?: Record<string, string>;
-  /** Request timeout in milliseconds (default: 30000) */
+  /** Positive timeout in milliseconds (default: 30000; transfers: 60000) */
   timeout?: number;
   /** Whether to follow redirects (default: true) */
   followRedirects?: boolean;
@@ -53,7 +53,7 @@ export interface RequestOptions {
  */
 export interface RequestOptionsWithBody extends RequestOptions {
   /** JSON body (automatically sets Content-Type) */
-  json?: object;
+  json?: object | string | number | boolean | null;
   /** String body */
   body?: string;
   /** Binary body */
@@ -89,7 +89,9 @@ export interface Response {
  * Download options
  */
 export interface DownloadOptions extends RequestOptions {
-  /** Resume download from existing file */
+  /** Resume on Android only when headers include an If-Range validator.
+   * Without a validator (and on iOS), restart with a complete download.
+   */
   resumable?: boolean;
   /** Progress callback */
   onProgress?: (progress: DownloadProgress) => void;
@@ -316,12 +318,12 @@ class RequestClient {
     let body: string | ArrayBuffer | null = null;
 
     // Handle JSON body
-    if (options?.json) {
+    if (options?.json !== undefined) {
       body = JSON.stringify(options.json);
       headers['Content-Type'] = 'application/json';
-    } else if (options?.body) {
+    } else if (options?.body !== undefined) {
       body = options.body;
-    } else if (options?.data) {
+    } else if (options?.data !== undefined) {
       body = options.data;
     }
 
@@ -498,7 +500,7 @@ class RequestClient {
     return {
       ok: native.success,
       status: native.statusCode,
-      responseText: new TextDecoder().decode(native.responseBody),
+      responseText: decodeString(native.responseBody, 'utf8'),
       error: native.success ? undefined : native.errorMessage,
     };
   }

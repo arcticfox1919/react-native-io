@@ -4,26 +4,35 @@ import {
 } from '@react-native-harness/platform-android';
 import {
   applePlatform,
-  appleSimulator,
+  applePhysicalDevice,
 } from '@react-native-harness/platform-apple';
 
-const config = {
+const bundleId = process.env.IO_IOS_BUNDLE_ID ?? 'io.example.rct';
+const ios = process.env.IO_IOS_LEGACY_UDID
+  ? {
+      name: 'ios',
+      config: {
+        udid: process.env.IO_IOS_LEGACY_UDID,
+        appPath: process.env.IO_IOS_APP_PATH,
+        bundleId,
+      },
+      runner: new URL('./scripts/ios-legacy-runner.mjs', import.meta.url).href,
+    }
+  : applePlatform({
+      name: 'ios',
+      device: applePhysicalDevice(process.env.IO_IOS_DEVICE_NAME ?? 'iPhone'),
+      bundleId,
+    });
+export default {
   entryPoint: './index.js',
   appRegistryComponentName: 'IoExample',
-  bridgeTimeout: 120000, // 2 minutes for slower devices
-
+  bridgeTimeout: 120000,
   runners: [
     androidPlatform({
       name: 'android',
       device: androidEmulator('Pixel_6_API_35'),
       bundleId: 'io.example',
     }),
-    applePlatform({
-      name: 'ios',
-      device: appleSimulator('iPhone 16 Pro', '18.5'),
-      bundleId: 'io.example.rct',
-    }),
+    ios,
   ],
 };
-
-export default config;

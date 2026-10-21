@@ -39,6 +39,10 @@ export enum WriteMode {
   Overwrite = 0,
   /** Append to existing file */
   Append = 1,
+  /** Atomic replacement; existing symlink/directory destinations are rejected. */
+  Atomic = 2,
+  /** Atomic replacement plus file and parent-directory fsync. */
+  AtomicDurable = 3,
 }
 
 /**
@@ -150,6 +154,12 @@ export interface DirectoryEntry {
  * Methods without 'Sync' suffix return Promises and run on a thread pool.
  */
 export interface IOFileSystem {
+  /**
+   * Stop accepting operations and release this native context after already
+   * submitted asynchronous work has finished. Calling it again is harmless.
+   */
+  dispose(): void;
+
   // ========================================================================
   // File Handle Operations (Streaming I/O)
   // ========================================================================
@@ -181,6 +191,9 @@ export interface IOFileSystem {
 
   /** Close file handle */
   fileClose(handle: FileHandleId): void;
+
+  /** Close file handle on the native worker pool */
+  fileCloseAsync(handle: FileHandleId): Promise<void>;
 
   /** Seek to position */
   fileSeek(

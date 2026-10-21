@@ -12,6 +12,10 @@
 #include "IOHttpClientIOS.hpp"
 #import <Foundation/Foundation.h>
 #include <dispatch/dispatch.h>
+#include <fstream>
+#include <array>
+#include <filesystem>
+#include "../cpp/src/IOLimits.hpp"
 
 // ============================================================================
 // Sync Request Delegate
@@ -22,6 +26,7 @@
 @property (nonatomic, strong) NSHTTPURLResponse* response;
 @property (nonatomic, strong) NSError* error;
 @property (nonatomic, assign) BOOL completed;
+@property (nonatomic, assign) BOOL followRedirects;
 @property (nonatomic, strong) dispatch_semaphore_t semaphore;
 @property (nonatomic, copy) void (^progressCallback)(int64_t, int64_t);
 @end
@@ -31,6 +36,7 @@
 - (instancetype)init {
     if (self = [super init]) {
         _receivedData = [NSMutableData data];
+        _followRedirects = YES;
         _completed = NO;
         _semaphore = dispatch_semaphore_create(0);
     }
@@ -47,9 +53,20 @@ didReceiveResponse:(NSURLResponse *)response
     completionHandler(NSURLSessionResponseAllow);
 }
 
+- (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task
+ willPerformHTTPRedirection:(NSHTTPURLResponse *)response newRequest:(NSURLRequest *)request
+ completionHandler:(void (^)(NSURLRequest *))completionHandler {
+    completionHandler(self.followRedirects ? request : nil);
+}
+
 - (void)URLSession:(NSURLSession *)session
           dataTask:(NSURLSessionDataTask *)dataTask
     didReceiveData:(NSData *)data {
+    if (data.length > rct_io::maxBufferBytes - self.receivedData.length) {
+        self.error = [NSError errorWithDomain:@"react-native-io" code:1 userInfo:@{NSLocalizedDescriptionKey: @"HTTP response exceeds buffer limit; use download"}];
+        [dataTask cancel];
+        return;
+    }
     [self.receivedData appendData:data];
 
     if (self.progressCallback) {
@@ -62,7 +79,7 @@ didReceiveResponse:(NSURLResponse *)response
 - (void)URLSession:(NSURLSession *)session
               task:(NSURLSessionTask *)task
 didCompleteWithError:(NSError *)error {
-    self.error = error;
+    if (error) self.error = error;
     self.completed = YES;
     dispatch_semaphore_signal(self.semaphore);
 }
@@ -112,28 +129,27 @@ didFinishDownloadingToURL:(NSURL *)location {
     NSHTTPURLResponse* response = (NSHTTPURLResponse*)downloadTask.response;
     self.statusCode = response.statusCode;
 
+    if (self.statusCode < 200 || self.statusCode >= 300) {
+        self.error = [NSError errorWithDomain:@"react-native-io" code:self.statusCode userInfo:@{NSLocalizedDescriptionKey: @"HTTP download failed"}];
+        return;
+    }
     NSError* moveError = nil;
     NSFileManager* fileManager = [NSFileManager defaultManager];
-
     NSURL* destURL = [NSURL fileURLWithPath:self.destinationPath];
-    if ([fileManager fileExistsAtPath:self.destinationPath]) {
-        [fileManager removeItemAtPath:self.destinationPath error:nil];
-    }
-
     NSString* directory = [self.destinationPath stringByDeletingLastPathComponent];
-    [fileManager createDirectoryAtPath:directory
-           withIntermediateDirectories:YES
-                            attributes:nil
-                                 error:nil];
-
-    if ([fileManager moveItemAtURL:location toURL:destURL error:&moveError]) {
-        NSDictionary* attrs = [fileManager attributesOfItemAtPath:self.destinationPath error:nil];
-        self.fileSize = [attrs fileSize];
-        self.success = YES;
-    } else {
+    if (![fileManager createDirectoryAtPath:directory withIntermediateDirectories:YES attributes:nil error:&moveError]) {
         self.error = moveError;
-        self.success = NO;
+        return;
     }
+    BOOL moved;
+    if ([fileManager fileExistsAtPath:self.destinationPath]) {
+        moved = [fileManager replaceItemAtURL:destURL withItemAtURL:location backupItemName:nil options:0 resultingItemURL:nil error:&moveError];
+    } else {
+        moved = [fileManager moveItemAtURL:location toURL:destURL error:&moveError];
+    }
+    self.success = moved;
+    self.error = moveError;
+    if (moved) self.fileSize = [[fileManager attributesOfItemAtPath:self.destinationPath error:nil] fileSize];
 }
 
 - (void)URLSession:(NSURLSession *)session
@@ -159,37 +175,34 @@ didCompleteWithError:(NSError *)error {
 
 @end
 
+static bool waitForCompletion(NSURLSessionTask* task,
+                              NSURLSession* session,
+                              dispatch_semaphore_t semaphore,
+                              int32_t timeoutMs) {
+    if (timeoutMs <= 0) return false;
+    // URLSession should complete within its configured resource timeout. Keep
+    // a small grace period for delivery of didCompleteWithError, but never
+    // leave a native worker blocked forever if that callback is lost.
+    const int64_t waitNanoseconds = static_cast<int64_t>(timeoutMs) * NSEC_PER_MSEC + 5LL * NSEC_PER_SEC;
+    if (dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, waitNanoseconds)) == 0) return true;
+    [task cancel];
+    [session invalidateAndCancel];
+    return false;
+}
+
 // ============================================================================
 // IOHttpClientIOS Implementation
 // ============================================================================
 
 namespace rct_io::network {
 
-IOHttpClientIOS::IOHttpClientIOS() {
-    @autoreleasepool {
-        NSURLSessionConfiguration* config = [NSURLSessionConfiguration defaultSessionConfiguration];
-        config.timeoutIntervalForRequest = 30.0;
-        config.timeoutIntervalForResource = 60.0;
-
-        delegateQueue_ = [[NSOperationQueue alloc] init];
-        delegateQueue_.maxConcurrentOperationCount = 4;
-
-        session_ = [NSURLSession sessionWithConfiguration:config
-                                                 delegate:nil
-                                            delegateQueue:delegateQueue_];
-    }
-}
-
-IOHttpClientIOS::~IOHttpClientIOS() {
-    @autoreleasepool {
-        [session_ invalidateAndCancel];
-    }
-}
+IOHttpClientIOS::IOHttpClientIOS() = default;
+IOHttpClientIOS::~IOHttpClientIOS() = default;
 
 NSMutableURLRequest* IOHttpClientIOS::createRequest(const HttpRequestConfig& config) {
     @autoreleasepool {
         NSURL* url = [NSURL URLWithString:[NSString stringWithUTF8String:config.url.c_str()]];
-        if (!url) {
+        if (!url || !([url.scheme.lowercaseString isEqualToString:@"http"] || [url.scheme.lowercaseString isEqualToString:@"https"])) {
             return nil;
         }
 
@@ -226,7 +239,7 @@ HttpResponse IOHttpClientIOS::convertResponse(NSHTTPURLResponse* response, NSDat
 
         NSDictionary* headers = response.allHeaderFields;
         for (NSString* key in headers) {
-            NSString* value = headers[key];
+            NSString* value = [headers[key] description];
             result.headers[[key UTF8String]] = [value UTF8String];
         }
     }
@@ -246,6 +259,11 @@ HttpResponse IOHttpClientIOS::convertResponse(NSHTTPURLResponse* response, NSDat
 
 HttpResponse IOHttpClientIOS::request(const HttpRequestConfig& config) {
     @autoreleasepool {
+        if (config.timeoutMs <= 0) {
+            HttpResponse response;
+            response.errorMessage = "timeoutMs must be greater than zero";
+            return response;
+        }
         NSMutableURLRequest* request = createRequest(config);
         if (!request) {
             HttpResponse response;
@@ -254,9 +272,11 @@ HttpResponse IOHttpClientIOS::request(const HttpRequestConfig& config) {
         }
 
         IOSyncRequestDelegate* delegate = [[IOSyncRequestDelegate alloc] init];
+        delegate.followRedirects = config.followRedirects;
 
         NSURLSessionConfiguration* sessionConfig = [NSURLSessionConfiguration defaultSessionConfiguration];
         sessionConfig.timeoutIntervalForRequest = config.timeoutMs / 1000.0;
+        sessionConfig.timeoutIntervalForResource = config.timeoutMs / 1000.0;
 
         NSURLSession* session = [NSURLSession sessionWithConfiguration:sessionConfig
                                                               delegate:delegate
@@ -265,7 +285,11 @@ HttpResponse IOHttpClientIOS::request(const HttpRequestConfig& config) {
         NSURLSessionDataTask* task = [session dataTaskWithRequest:request];
         [task resume];
 
-        dispatch_semaphore_wait(delegate.semaphore, DISPATCH_TIME_FOREVER);
+        if (!waitForCompletion(task, session, delegate.semaphore, config.timeoutMs)) {
+            HttpResponse response;
+            response.errorMessage = "HTTP request exceeded its completion deadline";
+            return response;
+        }
 
         [session invalidateAndCancel];
 
@@ -282,8 +306,13 @@ DownloadResult IOHttpClientIOS::download(const DownloadConfig& config,
     @autoreleasepool {
         DownloadResult result;
 
+        if (config.timeoutMs <= 0) {
+            result.errorMessage = "timeoutMs must be greater than zero";
+            return result;
+        }
+
         NSURL* url = [NSURL URLWithString:[NSString stringWithUTF8String:config.url.c_str()]];
-        if (!url) {
+        if (!url || !([url.scheme.lowercaseString isEqualToString:@"http"] || [url.scheme.lowercaseString isEqualToString:@"https"])) {
             result.errorMessage = "Invalid URL: " + config.url;
             return result;
         }
@@ -297,15 +326,11 @@ DownloadResult IOHttpClientIOS::download(const DownloadConfig& config,
         }
 
         if (config.resumable) {
-            NSFileManager* fileManager = [NSFileManager defaultManager];
-            NSString* destPath = [NSString stringWithUTF8String:config.destinationPath.c_str()];
-            if ([fileManager fileExistsAtPath:destPath]) {
-                NSDictionary* attrs = [fileManager attributesOfItemAtPath:destPath error:nil];
-                int64_t existingSize = [attrs fileSize];
-                NSString* rangeHeader = [NSString stringWithFormat:@"bytes=%lld-", existingSize];
-                [request setValue:rangeHeader forHTTPHeaderField:@"Range"];
-            }
+            [request setValue:nil forHTTPHeaderField:@"Range"];
+            [request setValue:nil forHTTPHeaderField:@"If-Range"];
         }
+        // Restart safely on iOS. A byte Range without an entity validator can
+        // concatenate different remote versions or replace a file with only its tail.
 
         IODownloadDelegate* delegate = [[IODownloadDelegate alloc] init];
         delegate.destinationPath = [NSString stringWithUTF8String:config.destinationPath.c_str()];
@@ -321,6 +346,8 @@ DownloadResult IOHttpClientIOS::download(const DownloadConfig& config,
         }
 
         NSURLSessionConfiguration* sessionConfig = [NSURLSessionConfiguration defaultSessionConfiguration];
+        sessionConfig.timeoutIntervalForRequest = config.timeoutMs / 1000.0;
+        sessionConfig.timeoutIntervalForResource = config.timeoutMs / 1000.0;
         NSURLSession* downloadSession = [NSURLSession sessionWithConfiguration:sessionConfig
                                                                       delegate:delegate
                                                                  delegateQueue:nil];
@@ -328,7 +355,10 @@ DownloadResult IOHttpClientIOS::download(const DownloadConfig& config,
         NSURLSessionDownloadTask* task = [downloadSession downloadTaskWithRequest:request];
         [task resume];
 
-        dispatch_semaphore_wait(delegate.semaphore, DISPATCH_TIME_FOREVER);
+        if (!waitForCompletion(task, downloadSession, delegate.semaphore, config.timeoutMs)) {
+            result.errorMessage = "HTTP download exceeded its completion deadline";
+            return result;
+        }
 
         [downloadSession invalidateAndCancel];
 
@@ -349,59 +379,41 @@ DownloadResult IOHttpClientIOS::download(const DownloadConfig& config,
 // File Upload
 // ============================================================================
 
-NSData* IOHttpClientIOS::createMultipartBody(const UploadConfig& config, NSString** boundary) {
-    @autoreleasepool {
-        *boundary = [NSString stringWithFormat:@"----IOHttpClientBoundary%lld",
-                     (long long)[[NSDate date] timeIntervalSince1970] * 1000];
-
-        NSMutableData* body = [NSMutableData data];
-
-        for (const auto& [key, value] : config.formFields) {
-            [body appendData:[[NSString stringWithFormat:@"--%@\r\n", *boundary]
-                             dataUsingEncoding:NSUTF8StringEncoding]];
-            [body appendData:[[NSString stringWithFormat:@"Content-Disposition: form-data; name=\"%s\"\r\n\r\n",
-                              key.c_str()] dataUsingEncoding:NSUTF8StringEncoding]];
-            [body appendData:[[NSString stringWithFormat:@"%s\r\n", value.c_str()]
-                             dataUsingEncoding:NSUTF8StringEncoding]];
-        }
-
-        NSString* filePath = [NSString stringWithUTF8String:config.filePath.c_str()];
-        NSData* fileData = [NSData dataWithContentsOfFile:filePath];
-
-        if (!fileData) {
-            return nil;
-        }
-
-        NSString* fileName = config.fileName.empty() ?
-            [filePath lastPathComponent] :
-            [NSString stringWithUTF8String:config.fileName.c_str()];
-
-        NSString* mimeType = config.mimeType.empty() ?
-            @"application/octet-stream" :
-            [NSString stringWithUTF8String:config.mimeType.c_str()];
-
-        NSString* fieldName = [NSString stringWithUTF8String:config.fieldName.c_str()];
-
-        [body appendData:[[NSString stringWithFormat:@"--%@\r\n", *boundary]
-                         dataUsingEncoding:NSUTF8StringEncoding]];
-        [body appendData:[[NSString stringWithFormat:@"Content-Disposition: form-data; name=\"%@\"; filename=\"%@\"\r\n",
-                          fieldName, fileName] dataUsingEncoding:NSUTF8StringEncoding]];
-        [body appendData:[[NSString stringWithFormat:@"Content-Type: %@\r\n\r\n", mimeType]
-                         dataUsingEncoding:NSUTF8StringEncoding]];
-        [body appendData:fileData];
-        [body appendData:[@"\r\n" dataUsingEncoding:NSUTF8StringEncoding]];
-
-        [body appendData:[[NSString stringWithFormat:@"--%@--\r\n", *boundary]
-                         dataUsingEncoding:NSUTF8StringEncoding]];
-
-        return body;
+NSURL* IOHttpClientIOS::createMultipartBody(const UploadConfig& config, NSString** boundary) {
+    *boundary = [@"----IOHttpClientBoundary" stringByAppendingString:NSUUID.UUID.UUIDString];
+    NSURL* temp = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:NSUUID.UUID.UUIDString]];
+    std::ofstream out(temp.path.UTF8String, std::ios::binary | std::ios::trunc);
+    std::ifstream input(config.filePath, std::ios::binary);
+    if (!out || !input) { [NSFileManager.defaultManager removeItemAtURL:temp error:nil]; return nil; }
+    auto marker = std::string((*boundary).UTF8String);
+    for (const auto& [key, value] : config.formFields) {
+        out << "--" << marker << "\r\nContent-Disposition: form-data; name=\"" << key << "\"\r\n\r\n" << value << "\r\n";
     }
+    auto name = config.fileName.empty() ? std::filesystem::path(config.filePath).filename().string() : config.fileName;
+    out << "--" << marker << "\r\nContent-Disposition: form-data; name=\"" << config.fieldName << "\"; filename=\"" << name
+        << "\"\r\nContent-Type: " << (config.mimeType.empty() ? "application/octet-stream" : config.mimeType) << "\r\n\r\n";
+    // Stream the body to a temporary file; NSURLSession streams it from disk.
+    // No NSData allocation proportional to the uploaded file size.
+    std::array<char, 64 * 1024> chunk;
+    while (input) {
+        input.read(chunk.data(), chunk.size());
+        out.write(chunk.data(), input.gcount());
+    }
+    out << "\r\n--" << marker << "--\r\n";
+    out.close();
+    if (input.bad() || !out) { [NSFileManager.defaultManager removeItemAtURL:temp error:nil]; return nil; }
+    return temp;
 }
 
 UploadResult IOHttpClientIOS::upload(const UploadConfig& config,
                                       UploadProgressCallback progressCallback) {
     @autoreleasepool {
         UploadResult result;
+
+        if (config.timeoutMs <= 0) {
+            result.errorMessage = "timeoutMs must be greater than zero";
+            return result;
+        }
 
         NSFileManager* fileManager = [NSFileManager defaultManager];
         NSString* filePath = [NSString stringWithUTF8String:config.filePath.c_str()];
@@ -411,13 +423,13 @@ UploadResult IOHttpClientIOS::upload(const UploadConfig& config,
         }
 
         NSURL* url = [NSURL URLWithString:[NSString stringWithUTF8String:config.url.c_str()]];
-        if (!url) {
+        if (!url || !([url.scheme.lowercaseString isEqualToString:@"http"] || [url.scheme.lowercaseString isEqualToString:@"https"])) {
             result.errorMessage = "Invalid URL: " + config.url;
             return result;
         }
 
         NSString* boundary = nil;
-        NSData* body = createMultipartBody(config, &boundary);
+        NSURL* body = createMultipartBody(config, &boundary);
         if (!body) {
             result.errorMessage = "Failed to read file: " + config.filePath;
             return result;
@@ -435,7 +447,6 @@ UploadResult IOHttpClientIOS::upload(const UploadConfig& config,
            forHTTPHeaderField:[NSString stringWithUTF8String:key.c_str()]];
         }
 
-        request.HTTPBody = body;
 
         IOSyncRequestDelegate* delegate = [[IOSyncRequestDelegate alloc] init];
 
@@ -450,16 +461,23 @@ UploadResult IOHttpClientIOS::upload(const UploadConfig& config,
         }
 
         NSURLSessionConfiguration* sessionConfig = [NSURLSessionConfiguration defaultSessionConfiguration];
+        sessionConfig.timeoutIntervalForRequest = config.timeoutMs / 1000.0;
+        sessionConfig.timeoutIntervalForResource = config.timeoutMs / 1000.0;
         NSURLSession* uploadSession = [NSURLSession sessionWithConfiguration:sessionConfig
                                                                     delegate:delegate
                                                                delegateQueue:nil];
 
-        NSURLSessionDataTask* task = [uploadSession dataTaskWithRequest:request];
+        NSURLSessionUploadTask* task = [uploadSession uploadTaskWithRequest:request fromFile:body];
         [task resume];
 
-        dispatch_semaphore_wait([delegate semaphore], DISPATCH_TIME_FOREVER);
+        if (!waitForCompletion(task, uploadSession, delegate.semaphore, config.timeoutMs)) {
+            [NSFileManager.defaultManager removeItemAtURL:body error:nil];
+            result.errorMessage = "HTTP upload exceeded its completion deadline";
+            return result;
+        }
 
         [uploadSession invalidateAndCancel];
+        [NSFileManager.defaultManager removeItemAtURL:body error:nil];
 
         NSError* error = [delegate error];
         if (error) {

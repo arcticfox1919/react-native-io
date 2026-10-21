@@ -34,12 +34,12 @@ Pod::Spec.new do |s|
     "cpp/network/*.h"
   ]
 
-  # Enable high optimization for C++ code in Release builds
+  # Respect the host build configuration; keep assertions/debug optimization intact.
   s.pod_target_xcconfig = {
-    "GCC_OPTIMIZATION_LEVEL" => "3",
-    "OTHER_CPLUSPLUSFLAGS" => "-DNDEBUG -O3",
+    "GCC_OPTIMIZATION_LEVEL" => "$(inherited)",
+    "OTHER_CPLUSPLUSFLAGS" => "$(inherited)",
     "CLANG_CXX_LANGUAGE_STANDARD" => "c++20",
-    "HEADER_SEARCH_PATHS" => "$(PODS_TARGET_SRCROOT)/cpp/src $(PODS_TARGET_SRCROOT)/cpp/hash $(PODS_TARGET_SRCROOT)/cpp/network"
+    "HEADER_SEARCH_PATHS" => "$(inherited) $(PODS_TARGET_SRCROOT)/cpp/src $(PODS_TARGET_SRCROOT)/cpp/hash $(PODS_TARGET_SRCROOT)/cpp/network"
   }
 
   install_modules_dependencies(s)

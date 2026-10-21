@@ -16,13 +16,13 @@ import { FileOpenMode } from './types';
 /**
  * File system context for batch file operations.
  *
- * Creates a shared native FileSystem instance with a thread pool that can be
- * reused across multiple File and Directory operations. This is more efficient
+ * Creates a shared native FileSystem instance whose worker pool starts on its
+ * first async operation and is reused across File and Directory operations. This is more efficient
  * than creating individual File/Directory instances when performing many
  * operations, as they all share the same thread pool.
  *
- * The native resources will be automatically released by garbage collection
- * when the FSContext object becomes unreachable.
+ * Call close() when the batch is complete. Garbage collection remains a
+ * fallback, but explicit close starts native cleanup deterministically.
  *
  * @example
  * ```typescript
@@ -41,8 +41,7 @@ import { FileOpenMode } from './types';
  *   dir.list(),
  * ]);
  *
- * // Optional: explicitly release when done
- * // (not required - GC will handle this automatically)
+ * // Stop new work and release this context after submitted work drains.
  * fs.close();
  * ```
  *
@@ -57,18 +56,40 @@ import { FileOpenMode } from './types';
  */
 export class FSContext {
   private _fs: IOFileSystem | null;
+  private readonly state: { native: IOFileSystem | null };
 
   /**
    * Create a FSContext with a shared thread pool.
    * Prefer using `openFS()` function instead of direct constructor.
    *
-   * @param numThreads Number of worker threads for async operations.
+   * @param numThreads Number of worker threads created on first async operation.
    *   - Default: 1 (single-threaded pool)
    *   - A single thread is sufficient for most use cases
    *   - Increase for better parallelism in concurrent file operations
    */
   constructor(numThreads?: number) {
-    this._fs = createFileSystem(numThreads);
+    this.state = { native: createFileSystem(numThreads) };
+    const state = this.state;
+    const methods = new Map<PropertyKey, unknown>();
+    this._fs = new Proxy({} as IOFileSystem, {
+      get(_target, property) {
+        const native = state.native;
+        if (!native) throw new Error('FSContext has been closed');
+        const value = Reflect.get(native, property);
+        if (typeof value !== 'function') return value;
+        if (!methods.has(property)) {
+          methods.set(property, (...args: unknown[]) => {
+            if (!state.native) throw new Error('FSContext has been closed');
+            return Reflect.apply(
+              Reflect.get(state.native, property),
+              state.native,
+              args
+            );
+          });
+        }
+        return methods.get(property);
+      },
+    });
   }
 
   /**
@@ -132,15 +153,24 @@ export class FSContext {
   /**
    * Release the underlying IOFileSystem instance.
    *
-   * **Note**: This method is NOT required to be called.
-   * When the FSContext object becomes unreachable, JavaScript's garbage
-   * collector will automatically release the native resources.
-   *
    * After calling close(), any File or Directory instances created from
-   * this FSContext will throw an error when performing operations.
+   * this FSContext will throw an error when performing operations. Work that
+   * was already submitted is allowed to finish. Native pool destruction and
+   * file-handle cleanup happen in the background, so close() does not wait for
+   * slow storage operations.
+   *
+   * Calling close() more than once is harmless. Garbage collection remains a
+   * fallback when explicit cleanup is omitted.
    */
   close(): void {
-    this._fs = null;
+    const native = this.state.native;
+    if (!native) return;
+    try {
+      native.dispose();
+    } finally {
+      this.state.native = null;
+      this._fs = null;
+    }
   }
 }
 
@@ -165,7 +195,7 @@ export class FSContext {
  * const fs = openFS();
  * const file = fs.file('/path/to/file.txt');
  * const content = await file.readString();
- * fs.close(); // optional
+ * fs.close();
  * ```
  *
  * @example

@@ -23,7 +23,9 @@ const NativeModule = TurboModuleRegistry.getEnforcing<Spec>('NativeStdIO');
 
 /**
  * Create a new IOFileSystem instance.
- * Each call creates a new native file system client with its own thread pool.
+ * Each call creates a native file system client with its own executor. Worker
+ * threads are created lazily when its first async operation is submitted, so
+ * sync-only use does not allocate a worker thread.
  *
  * @param numThreads Number of worker threads for async operations (default: 1)
  * @returns New IOFileSystem instance
@@ -32,12 +34,17 @@ const NativeModule = TurboModuleRegistry.getEnforcing<Spec>('NativeStdIO');
  *           configurable thread pools, or File/Directory classes directly.
  */
 export function createFileSystem(numThreads: number = 1): IOFileSystem {
+  if (!Number.isInteger(numThreads) || numThreads < 1 || numThreads > 32) {
+    throw new RangeError('Thread count must be an integer between 1 and 32');
+  }
   return NativeModule.createFileSystem(numThreads) as IOFileSystem;
 }
 
 /**
  * Create a new IORequest instance.
- * Each call creates a new native HTTP client with its own thread pool.
+ * Each call creates independent native request state. All instances share the
+ * four-worker HTTP pool, which is created on first native request use and kept
+ * until the mobile process exits.
  *
  * @returns New IORequest instance
  */
@@ -108,4 +115,12 @@ export function encodeString(
   encoding: StringEncoding = 'utf8'
 ): ArrayBuffer {
   return NativeModule.encodeString(str, encoding) as ArrayBuffer;
+}
+
+// Standalone File/Directory instances share one bounded default worker instead
+// of creating a thread pool for every path. Explicit FSContexts remain isolated.
+let defaultFileSystem: IOFileSystem | null = null;
+export function getDefaultFileSystem(): IOFileSystem {
+  if (!defaultFileSystem) defaultFileSystem = createFileSystem(1);
+  return defaultFileSystem;
 }

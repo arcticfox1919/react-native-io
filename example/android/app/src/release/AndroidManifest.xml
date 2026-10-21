@@ -1,0 +1,4 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- Test example only: allow the ADB-loopback fixture, keep other cleartext denied. -->
+  <application android:networkSecurityConfig="@xml/io_test_network_security" />
+</manifest>
