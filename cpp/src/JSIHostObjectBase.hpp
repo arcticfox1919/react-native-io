@@ -557,7 +557,10 @@ public:
                         auto pendingTask = acquirePendingTask();
                         auto inputBudget = std::make_shared<rct_io::AsyncPayloadLease>(rct_io::AsyncPayloadLease::Kind::Input);
                         auto [strings, numbers, bools, buffers] = extractArgs(runtime, args, count, *inputBudget);
-                        if constexpr (requires { Derived::appendArgumentMetadata(runtime, propName, args, numbers); })
+                        // Clang 15 (Harmony NDK) cannot name a local structured
+                        // binding inside this requires-expression. Test the same
+                        // signature with a requires parameter instead.
+                        if constexpr (requires(std::vector<double>& metadata) { Derived::appendArgumentMetadata(runtime, propName, args, metadata); })
                             Derived::appendArgumentMetadata(runtime, propName, args, numbers);
                         auto state = runtimeState(runtime);
                         auto& promise = *state->promiseConstructor;

@@ -57,6 +57,7 @@ export {
   type IOPlatform,
   type IOPlatformAndroid,
   type IOPlatformIOS,
+  type IOPlatformHarmony,
 } from './types';
 export type { StringEncoding } from './NativeStdIO';
 
@@ -89,7 +90,7 @@ import {
   encodeString,
   type StringEncoding,
 } from './NativeStdIO';
-import type { IOPlatform, IOPlatformAndroid, IOPlatformIOS } from './types';
+import type { IOPlatform } from './types';
 import { IOPlatformType } from './types';
 
 // Internal fs instance for utility functions (lazy initialized)
@@ -128,8 +129,11 @@ const _getPlatform = () => {
  * if (Platform.platform === IOPlatformType.Android) {
  *   console.log('External files:', Platform.externalFilesDir);
  *   console.log('SDK Version:', Platform.sdkVersion);
- * } else {
+ * } else if (Platform.platform === IOPlatformType.iOS) {
  *   console.log('Bundle:', Platform.bundleDir);
+ *   console.log('Temp:', Platform.tempDir);
+ * } else {
+ *   console.log('Files:', Platform.filesDir);
  *   console.log('Temp:', Platform.tempDir);
  * }
  * ```
@@ -157,19 +161,19 @@ export const FS = {
    *
    * @example
    * ```typescript
-   * import { FS, IOPlatformType, IOPlatformAndroid, IOPlatformIOS } from 'react-native-io';
+   * import { FS, IOPlatformType } from 'react-native-io';
    *
    * const platform = FS.getPlatform();
    * if (platform.platform === IOPlatformType.Android) {
-   *   const p = FS.getPlatform<IOPlatformAndroid>();
-   *   console.log(p.sdkVersion, p.externalFilesDir);
+   *   console.log(platform.sdkVersion, platform.externalFilesDir);
+   * } else if (platform.platform === IOPlatformType.iOS) {
+   *   console.log(platform.bundleDir, platform.tempDir);
    * } else {
-   *   const p = FS.getPlatform<IOPlatformIOS>();
-   *   console.log(p.bundleDir, p.tempDir);
+   *   console.log(platform.filesDir, platform.tempDir);
    * }
    * ```
    */
-  getPlatform<T extends IOPlatformAndroid | IOPlatformIOS = IOPlatform>(): T {
+  getPlatform<T extends IOPlatform = IOPlatform>(): T {
     return _getPlatform() as T;
   },
 
@@ -181,6 +185,7 @@ export const FS = {
    * Cache directory path
    * - iOS: <App>/Library/Caches
    * - Android: /data/data/<pkg>/cache
+   * - HarmonyOS: ApplicationContext.cacheDir
    */
   get cacheDir(): string {
     return _getPlatform().cacheDir;
@@ -190,6 +195,7 @@ export const FS = {
    * Document directory path (for persistent application files)
    * - iOS: <App>/Documents (backed up by iCloud)
    * - Android: /data/data/<pkg>/files (internal app storage)
+   * - HarmonyOS: ApplicationContext.filesDir (internal app storage)
    */
   get documentDir(): string {
     const p = _getPlatform();
@@ -200,16 +206,18 @@ export const FS = {
    * Temporary directory path (may be purged by system)
    * - iOS: <App>/tmp
    * - Android: /data/data/<pkg>/cache (same as cacheDir)
+   * - HarmonyOS: ApplicationContext.tempDir
    */
   get tempDir(): string {
     const p = _getPlatform();
-    return p.platform === IOPlatformType.iOS ? p.tempDir : p.cacheDir;
+    return p.platform === IOPlatformType.Android ? p.cacheDir : p.tempDir;
   },
 
   /**
    * Main bundle path (iOS only, read-only)
    * - iOS: <App>.app
    * - Android: undefined
+   * - HarmonyOS: undefined
    */
   get bundleDir(): string | undefined {
     const p = _getPlatform();
@@ -220,6 +228,7 @@ export const FS = {
    * External files directory (Android only)
    * - iOS: same as documentDir
    * - Android: /storage/emulated/0/Android/data/<pkg>/files
+   * - HarmonyOS: same as documentDir (no external storage alias)
    */
   get externalDir(): string {
     const p = _getPlatform();
@@ -232,6 +241,7 @@ export const FS = {
    * External cache directory (Android only)
    * - iOS: same as cacheDir
    * - Android: /storage/emulated/0/Android/data/<pkg>/cache
+   * - HarmonyOS: same as cacheDir
    */
   get externalCacheDir(): string {
     const p = _getPlatform();
@@ -244,12 +254,14 @@ export const FS = {
    * Download directory (app-specific)
    * - iOS: <App>/Documents (no separate download folder)
    * - Android: /storage/emulated/0/Android/data/<pkg>/files/Download
+   * - HarmonyOS: <filesDir>/Download (app-specific)
    */
   get downloadDir(): string {
     const p = _getPlatform();
-    return p.platform === IOPlatformType.Android
-      ? p.downloadsDir
-      : p.documentsDir;
+    if (p.platform === IOPlatformType.Android) return p.downloadsDir;
+    if (p.platform === IOPlatformType.Harmony)
+      return FS.joinPaths(p.filesDir, 'Download');
+    return p.documentsDir;
   },
 
   // ==========================================================================

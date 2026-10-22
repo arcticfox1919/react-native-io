@@ -63,6 +63,10 @@ yarn typecheck
 yarn test:example-engine
 ```
 
+The development baseline is React Native 0.84.1, React 19.2.3, and Node.js
+22.11 or later. HarmonyOS uses RNOH and Harmony CLI 0.84.3 with the same
+JavaScript application and quality runner.
+
 test:example-engine checks statistics, seed reproducibility, maximum
 concurrency, error draining, and cancellation deadlines. It does not mock
 device cases and call them native successes. yarn typecheck includes example
@@ -155,7 +159,7 @@ Release comparisons must use a rebuilt -configuration Release app. Debug data
 is useful for regression discovery and test-flow validation, but it is not
 release-performance evidence and must not be compared directly with Release.
 
-If React Native 0.83 reports a fmt consteval error, the optional test-build
+If a source-built iOS dependency reports a fmt consteval error, the optional test-build
 compatibility step is:
 
 ```sh
@@ -419,3 +423,161 @@ HTTP transport results and file API results measure different layers. Do not
 compare their raw milliseconds as if they represented the same operation, and
 do not use a local fixture result as evidence for production TLS, proxy, or
 certificate behavior.
+
+## 14. HarmonyOS validation
+
+The checked-in `example/harmony` application uses the official Harmony CLI
+0.84.3 template, RNAbility/RNApp, the RNOH worker, and official autolinking.
+It targets HarmonyOS 6.1.1 (API 24), requires 5.0.4 (API 16), and builds arm64
+device binaries. The library's source HAR is consumed through the example's
+workspace dependency, rather than through a separate copy of its C++ sources.
+See the [integration guide](../harmony/README.md) for directory mappings and
+HTTP limitations.
+
+### Prepare and build
+
+```sh
+# From the repository root
+yarn install --immutable
+yarn example prepare:harmony
+yarn example build:harmony
+```
+
+The preparation command installs the HAR project's OHPM dependencies, rebuilds
+`harmony/io.har`, invokes official `link-harmony`, and installs the example's
+OHPM dependencies. It creates `example/harmony/build-profile.json5` from the
+tracked template only when no local profile exists. Local signatures, generated
+factories, raw bundles, dependency directories, and build outputs are ignored.
+
+`build:harmony` defaults to Release, generates an optimized Hermes V1 bytecode
+bundle, and calls official Hvigor `assembleHap`. The template provides no
+personal signing credentials. Without local signing configuration, the output
+is `example/harmony/entry/build/default/outputs/default/entry-default-unsigned.hap`.
+Physical devices require a signed HAP. Some simulators also accept the unsigned
+HAP for local validation.
+
+The scripts default to DevEco Studio at
+`/Applications/DevEco-Studio.app/Contents`. Override `DEVECO_HOME`,
+`DEVECO_SDK_HOME`, `OHPM_BIN`, `HVIGOR_BIN`, or `HVIGOR_NODE` for other tool paths.
+
+### Sign and run on a physical device
+
+Open `example/harmony` in DevEco Studio. Sign in and configure automatic
+signing under **File > Project Structure > Signing Configs** for the connected
+device. Keep signing information in the ignored local build profile.
+Rebuild the Release HAP after configuring signing:
+
+```sh
+# From the repository root; use the hdc binary from your SDK.
+yarn example build:harmony
+hdc list targets
+hdc install example/harmony/entry/build/default/outputs/default/entry-default-signed.hap
+hdc shell aa start -b xyz.bczl.ioexample -a EntryAbility
+```
+
+The Release application loads `hermes_bundle.hbc` from its own resources and
+does not need Metro. The example's `BytecodeBundleProvider` supplies bytes to
+RNOH's native buffer loader. RNOH 0.84.3's raw-resource mmap loader can report
+`Buffer misaligned` when the HBC offset in the HAP is not aligned. This adds
+a startup buffer copy and does not change the library's file or HTTP paths.
+The home screen offers the existing interactive quality
+tests and API examples. Run Quick first, then Full and Soak, and record device,
+system API, native build mode, JavaScript development mode, and test profile.
+
+### Debug installation and Metro
+
+Run `yarn example prepare:harmony` once after a clean checkout, and again when
+the library's native sources change. `run-harmony` builds and installs the app,
+but does not build the library's source HAR. Set the SDK path before invoking
+the official CLI:
+
+```sh
+export DEVECO_SDK_HOME=/Applications/DevEco-Studio.app/Contents/sdk
+yarn example harmony
+```
+
+This is `react-native run-harmony` from the example directory. It defaults to
+Debug, starts Metro when needed, installs the HAP, launches EntryAbility, and
+sets up `hdc rport tcp:8081 tcp:8081`. A physical device requires the local
+signing configuration described above. With multiple connected devices, pass
+`--simulator <hdc-target>` to select the target; the official CLI uses this
+option for both devices and simulators.
+
+To keep Metro in an existing terminal, use two terminals from the repository
+root:
+
+```sh
+# Terminal 1
+yarn example start
+
+# Terminal 2 (the currently connected simulator)
+export DEVECO_SDK_HOME=/Applications/DevEco-Studio.app/Contents/sdk
+yarn example harmony --no-packager --simulator 127.0.0.1:5555
+```
+
+Harmony needs both a platform-aware Metro resolver and a reachable bundle URL:
+
+- `example/metro.config.js` merges the official `createHarmonyMetroConfig`
+  with the monorepo configuration. For `platform=harmony`, imports of
+  `react-native` resolve to `@react-native-oh/react-native-harmony`.
+- The Debug page uses the official `MetroJSBundleProvider`. Its default URL is
+  `http://localhost:8081/index.bundle?platform=harmony&dev=true&minify=false`.
+  Here, `localhost` is the device; HDC reverse forwarding connects it to Metro
+  on the computer. There is no need to replace the app's React Native dependency
+  or manually substitute the computer's LAN address for this USB/simulator flow.
+- For a different port, pass the same `--port` to `start` and `harmony`.
+  Keep the CLI's packager option enabled, for example
+  `yarn example harmony --port 8082`. It detects an already running Metro and
+  updates the Metro provider in `pages/Index.ets` for non-default ports; review
+  that source change before committing. In CLI 0.84.3, `--no-packager` skips
+  this source update, so that combination requires setting the provider's port
+  manually as well.
+
+The Debug page falls back to embedded bytecode when Metro cannot be reached,
+if an embedded bundle has already been generated. Seeing the home screen alone
+does not prove Metro connectivity. Check that Metro receives a Harmony bundle
+request and that a JavaScript edit appears through Fast Refresh. If forwarding
+is lost after reconnecting a device, restore it with
+`hdc -t <target> rport tcp:8081 tcp:8081` and reload the app.
+
+A Debug HAP with an embedded fallback can be built with
+`yarn example build:harmony debug`; its measurements must not be included in
+Release performance results.
+
+### HTTP fixture and native contract checks
+
+Start the fixture and forward its port:
+
+```sh
+yarn example test:fixture
+hdc rport tcp:8765 tcp:8765
+```
+
+Enter `http://127.0.0.1:8765` in the quality panel's fixture URL field before
+starting the profile. Alternatively, use a reachable PC LAN address. Network
+cases are skipped when no fixture URL is configured; a skipped group does
+not validate HTTP. On HarmonyOS, resumable downloads restart from byte zero,
+and multipart fields have the RCP limits documented in the integration guide.
+
+From the repository root, run the desktop transport-contract checks:
+
+```sh
+yarn test:harmony-http
+SANITIZE=thread yarn test:harmony-http
+```
+
+This test compiles against the real HarmonyOS SDK RCP declarations with an RCP
+test double and ASan/UBSan or TSan. It checks binary data, bounded responses, redirect
+configuration, failed downloads preserving old content, symlink rejection,
+multipart field lifetime, concurrent transfers, and native resource cleanup.
+It does not exercise HarmonyOS networking, certificate validation, or device I/O.
+
+Physical-device acceptance must separately cover the shared functional,
+boundary, critical, stress, and local-fixture network groups. The interactive
+panel accepts an explicit fixture URL. The automatic entry's discovery covers
+Android USB forwarding and iOS Settings, so configure its fixture explicitly
+when using it on HarmonyOS.
+
+Use a Release HAP and production JavaScript bundle for performance evaluation.
+Do not label successful source-HAR packaging, native cross-compilation, or
+desktop contract tests as successful device or TLS validation.

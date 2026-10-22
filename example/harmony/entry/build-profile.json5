@@ -1,0 +1,25 @@
+{
+  "apiType": 'stageMode',
+  "buildOption": {
+    "nativeLib": {
+      "filter": { "excludes": ["**/x86_64/**", "**/armeabi-v7a/**"] }
+    },
+    "sourceOption": {
+      "workers": ["./src/main/ets/workers/RNOHWorker.ets"]
+    },
+    "externalNativeOptions": {
+      "path": "./src/main/cpp/CMakeLists.txt",
+      "arguments": "",
+      "abiFilters": ["arm64-v8a"]
+    },
+  },
+  "targets": [
+    {
+      "name": "default",
+      "runtimeOS": "HarmonyOS"
+    },
+    {
+      "name": "ohosTest",
+    }
+  ]
+}

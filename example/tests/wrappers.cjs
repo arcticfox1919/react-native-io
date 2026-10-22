@@ -23,13 +23,22 @@ const nativeFS = new Proxy(
       (_target, name) =>
       (...args) => {
         calls.push([name, ...args]);
+        if (name === 'joinPaths') return args.join('/');
         return name === 'dispose' || name.endsWith('Sync')
           ? undefined
           : Promise.resolve();
       },
   }
 );
+const platform = {
+  platform: 'harmony',
+  filesDir: '/harmony/files',
+  documentsDir: '/harmony/files',
+  cacheDir: '/harmony/cache',
+  tempDir: '/harmony/temp',
+};
 const native = {
+  createPlatform: () => platform,
   createFileSystem: () => {
     creates++;
     return nativeFS;
@@ -113,8 +122,36 @@ Module._load = function (name, ...args) {
       'falsy JSON body must be sent'
     );
   }
+  const { FS, Platform, IOPlatformType } = require('../../src/index.tsx');
+  assert.equal(Platform.platform, IOPlatformType.Harmony);
+  assert.equal(FS.documentDir, '/harmony/files');
+  assert.equal(FS.tempDir, '/harmony/temp');
+  assert.equal(FS.externalDir, '/harmony/files');
+  assert.equal(FS.externalCacheDir, '/harmony/cache');
+  assert.equal(FS.downloadDir, '/harmony/files/Download');
+  assert.equal(FS.bundleDir, undefined);
+  Object.assign(platform, {
+    platform: 'android',
+    filesDir: '/android/files',
+    documentsDir: '/android/external/Documents',
+    cacheDir: '/android/cache',
+    downloadsDir: '/android/external/Download',
+  });
+  assert.equal(FS.documentDir, '/android/files');
+  assert.equal(FS.tempDir, '/android/cache');
+  assert.equal(FS.downloadDir, '/android/external/Download');
+  assert.equal(Platform.documentsDir, '/android/external/Documents');
+  Object.assign(platform, {
+    platform: 'ios',
+    documentsDir: '/ios/Documents',
+    tempDir: '/ios/tmp',
+    bundleDir: '/ios/App.app',
+  });
+  assert.equal(FS.documentDir, '/ios/Documents');
+  assert.equal(FS.tempDir, '/ios/tmp');
+  assert.equal(FS.bundleDir, '/ios/App.app');
   console.log(
-    'PASS: closed contexts invalidate children, thread limits, shared default worker, repeated async close, falsy JSON bodies'
+    'PASS: context lifecycle, thread limits, async close, JSON bodies, Android/iOS/HarmonyOS directory mappings'
   );
 })().catch((error) => {
   console.error(error);

@@ -90,7 +90,7 @@ export interface Response {
  */
 export interface DownloadOptions extends RequestOptions {
   /** Resume on Android only when headers include an If-Range validator.
-   * Without a validator (and on iOS), restart with a complete download.
+   * Without a validator (and on iOS/HarmonyOS), restart with a complete download.
    */
   resumable?: boolean;
   /** Progress callback */

@@ -1,0 +1,10 @@
+{
+  "name": "@arcticfox1919/react-native-io",
+  "version": "0.1.5",
+  "description": "C++20 I/O TurboModule for HarmonyOS",
+  "main": "Index.ets",
+  "license": "MIT",
+  "dependencies": {
+    "@rnoh/react-native-openharmony": "0.84.3"
+  }
+}

@@ -66,7 +66,7 @@ export function createPlatform(): IOPlatform {
  * Install HTTP client (Android only).
  * Pre-warms JNI class caches for better performance.
  * This should be called before using HTTP functionality on Android.
- * On iOS, this is a no-op.
+ * On iOS and HarmonyOS, this is a no-op.
  *
  * @internal This function is for internal use.
  */

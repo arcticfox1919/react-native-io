@@ -17,6 +17,8 @@ export enum IOPlatformType {
   iOS = 'ios',
   /** Android platform */
   Android = 'android',
+  /** HarmonyOS platform */
+  Harmony = 'harmony',
 }
 
 /**
@@ -547,10 +549,21 @@ export interface IOPlatformIOS extends IOBasePlatform {
   readonly filesDir: string;
 }
 
-/**
- * Platform union type
- */
-export type IOPlatform = IOPlatformAndroid | IOPlatformIOS;
+/** HarmonyOS application-scoped directories (AbilityKit C API, API 16+). */
+export interface IOPlatformHarmony extends IOBasePlatform {
+  readonly platform: IOPlatformType.Harmony;
+  /** ApplicationContext filesDir. */
+  readonly filesDir: string;
+  /** Alias of filesDir for portable persistent storage. */
+  readonly documentsDir: string;
+  /** ApplicationContext cacheDir. */
+  readonly cacheDir: string;
+  /** ApplicationContext tempDir. */
+  readonly tempDir: string;
+}
+
+/** Platform union type. */
+export type IOPlatform = IOPlatformAndroid | IOPlatformIOS | IOPlatformHarmony;
 
 /**
  * Native IORequest interface (exposed via JSI)

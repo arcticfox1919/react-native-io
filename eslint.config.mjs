@@ -25,6 +25,7 @@ export default defineConfig([
   },
   {
     files: [
+      'scripts/*.cjs',
       'example/scripts/*.{cjs,mjs}',
       'example/tests/**/*.cjs',
       'eslint.config.mjs',
@@ -33,6 +34,6 @@ export default defineConfig([
     languageOptions: { ecmaVersion: 2022 },
   },
   {
-    ignores: ['node_modules/', 'lib/'],
+    ignores: ['node_modules/', 'lib/', 'harmony/', 'example/harmony/'],
   },
 ]);

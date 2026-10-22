@@ -1,0 +1,37 @@
+{
+// build-profile.json5 can contain signingConfigs which are unique for each developer, therefore that file is ignored by Git. Create a build-profile.json5 based on this template after cloning this repository to be able to open this project in DevEco Studio.
+  app: {
+    products: [
+      {
+        name: 'default',
+        compatibleSdkVersion: '5.0.4(16)',
+        targetSdkVersion: '6.1.1(24)',
+        runtimeOS: 'HarmonyOS',
+        buildOption: {
+          nativeCompiler: 'BiSheng'
+        }
+      },
+    ],
+    buildModeSet: [
+      {
+        name: 'debug',
+      },
+      {
+        name: 'release',
+      },
+    ],
+    signingConfigs: [],
+  },
+  modules: [
+    {
+      name: 'entry',
+      srcPath: './entry',
+      targets: [
+        {
+          name: 'default',
+          applyToProducts: ['default'],
+        },
+      ],
+    },
+  ],
+}

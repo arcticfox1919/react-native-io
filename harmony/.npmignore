@@ -1,0 +1,8 @@
+oh_modules/
+.hvigor/
+.cxx/
+**/build/
+local.properties
+**/oh-package-lock.json5
+**/BuildProfile.ets
+io/src/main/cpp/io-core/

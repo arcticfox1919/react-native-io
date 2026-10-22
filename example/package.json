@@ -6,6 +6,10 @@
     "android": "react-native run-android",
     "ios": "react-native run-ios",
     "start": "react-native start",
+    "harmony": "react-native run-harmony",
+    "prepare:harmony": "node scripts/prepare-harmony.cjs",
+    "bundle:harmony": "react-native bundle-harmony --entry-file index.js --dev false --js-engine hermes --hermesc-dir ./node_modules/hermes-compiler/hermesc --hermesc-options O",
+    "build:harmony": "node scripts/build-harmony.cjs",
     "build:android": "react-native build-android --extra-params \"--no-daemon --console=plain -PreactNativeArchitectures=arm64-v8a\"",
     "build:ios": "react-native build-ios --mode Debug",
     "test": "jest",
@@ -22,30 +26,36 @@
     "test:wrappers": "node tests/wrappers.cjs",
     "test:android-http": "bash scripts/test-android-http.sh",
     "test:apple-http": "bash scripts/test-apple-http.sh",
+    "test:harmony-http": "bash scripts/test-harmony-http.sh",
     "bench:hash": "bash scripts/benchmark-hash.sh"
   },
   "dependencies": {
-    "react": "19.2.0",
-    "react-native": "0.83.0"
+    "@react-native-oh/react-native-harmony": "0.84.3",
+    "react": "19.2.3",
+    "react-native": "0.84.1",
+    "react-native-io": "workspace:*"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
     "@babel/preset-env": "^7.25.3",
     "@babel/runtime": "^7.25.0",
-    "@react-native-community/cli": "20.0.0",
-    "@react-native-community/cli-platform-android": "20.0.0",
-    "@react-native-community/cli-platform-ios": "20.0.0",
+    "@react-native-community/cli": "20.1.0",
+    "@react-native-community/cli-platform-android": "20.1.0",
+    "@react-native-community/cli-platform-ios": "20.1.0",
     "@react-native-harness/platform-android": "1.0.0-alpha.19",
     "@react-native-harness/platform-apple": "1.0.0-alpha.19",
-    "@react-native/babel-preset": "0.83.0",
-    "@react-native/metro-config": "0.83.0",
-    "@react-native/typescript-config": "0.83.0",
+    "@react-native-oh/react-native-harmony-cli": "0.84.3",
+    "@react-native/babel-preset": "0.84.1",
+    "@react-native/metro-config": "0.84.1",
+    "@react-native/typescript-config": "0.84.1",
     "@types/react": "^19.2.0",
+    "hermes-compiler": "250829098.0.9",
+    "metro": "0.83.3",
     "react-native-builder-bob": "^0.40.13",
     "react-native-harness": "1.0.0-alpha.19",
     "react-native-monorepo-config": "^0.3.1"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.11.0"
   }
 }

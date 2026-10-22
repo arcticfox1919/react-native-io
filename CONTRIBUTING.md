@@ -98,13 +98,22 @@ Our pre-commit hooks verify that your commit message matches this format when co
 
 ### Publishing to npm
 
-We use [release-it](https://github.com/release-it/release-it) to make it easier to publish new versions. It handles common tasks like bumping version based on semver, creating tags and releases etc.
+We use [release-it](https://github.com/release-it/release-it) to publish the npm package and create Git tags and GitHub releases. Maintain the version manually in `package.json`.
 
-To publish new versions, run the following:
+After updating `version` in `package.json`, run:
 
 ```sh
 yarn release
 ```
+
+The release command uses `--no-increment` to keep your version unchanged.
+Before publishing, release-it rebuilds `harmony/io.har` through its
+`before:release` hook. A failed build stops the release before publication.
+Install the HarmonyOS SDK and the HAR project's
+OHPM dependencies as described in [the HarmonyOS guide](harmony/README.md#maintainer-build).
+
+Direct `npm pack` or `npm publish` commands only check that the HAR exists;
+run `yarn harmony:har` first when using those commands.
 
 
 ### Scripts

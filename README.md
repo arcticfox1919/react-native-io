@@ -4,16 +4,16 @@
 
 **A high-performance React Native TurboModule powered by pure C++20**
 
-File systems · Streaming I/O · File hashing · HTTP · Android and iOS
+File systems · Streaming I/O · File hashing · HTTP · Android, iOS, and HarmonyOS
 
 [![npm version](https://img.shields.io/npm/v/react-native-io.svg)](https://www.npmjs.com/package/react-native-io)
 [![license](https://img.shields.io/npm/l/react-native-io.svg)](https://github.com/arcticfox1919/react-native-io/blob/main/LICENSE)
 
 </div>
 
-`react-native-io` provides straightforward, type-safe file and network APIs for React Native. Its file, directory, `FileHandle`, hashing, and JSI binding layers are implemented in pure C++20 and exposed through a TurboModule. Asynchronous file operations run on native worker pools and do not block the JavaScript thread. HTTP operations use the system networking stack on Android and iOS.
+`react-native-io` provides straightforward, type-safe file and network APIs for React Native. Its file, directory, `FileHandle`, hashing, and JSI binding layers are implemented in pure C++20 and exposed through a TurboModule. Asynchronous file operations run on native worker pools and do not block the JavaScript thread. HTTP operations use the system networking stack on Android, iOS, and HarmonyOS.
 
-This library requires the React Native New Architecture with TurboModules and JSI. The legacy Bridge architecture is not supported.
+This library requires React Native 0.84 or later with TurboModules and JSI. Development and the example use React Native 0.84.1, React 19.2.3, and Node.js 22.11 or later. The legacy Bridge architecture is not supported.
 
 ## Features
 
@@ -48,6 +48,19 @@ pod install
 ```
 
 Ensure that the host application has enabled the React Native New Architecture. The package supports autolinking and does not require manual module registration.
+
+## HarmonyOS support
+
+HarmonyOS uses the same pure C++20 TurboModule core for files, directories,
+streaming, hashing, and encoding. HTTP uses Huawei's Remote Communication Kit.
+Use the same JavaScript imports and APIs across all three platforms.
+
+HarmonyOS 5.0.4 (API 16) or later is required. The example uses React Native
+0.84.1 and RNOH/Harmony CLI 0.84.3. The npm package includes a source HAR and
+supports official RNOH autolinking.
+
+See the **[HarmonyOS guide](harmony/README.md)** for setup, directory mappings,
+HTTP differences, and the example app.
 
 ## Quick start
 
@@ -355,11 +368,66 @@ if (!result.ok) {
 Most file APIs provide both asynchronous and synchronous variants:
 
 ```typescript
-await file.writeString('async'); // Runs on a worker pool; preferred
-file.writeStringSync('sync'); // Runs on and blocks the JS thread
+await file.writeString('async'); // Runs on a native worker and returns a Promise
+file.writeStringSync('sync'); // Calls C++ directly and finishes before returning
 ```
 
-Use asynchronous APIs for large files, hashing, directory traversal, and batches. Use synchronous APIs only for small data or initialization paths that must finish synchronously.
+Both variants use the same C++ file operations. The difference is where the work
+runs and how the result returns to JavaScript.
+
+| Aspect            | Synchronous (`Sync`)                                      | Asynchronous (`await`)                                               |
+| ----------------- | --------------------------------------------------------- | -------------------------------------------------------------------- |
+| Execution         | C++ runs directly on the calling JS thread                | I/O runs on a native worker                                          |
+| Scheduling cost   | No worker queue, thread handoff, or Promise completion    | Queues the task and delivers its result back to JS through a Promise |
+| Return value      | The result is available immediately when the call returns | The result is available when the Promise settles                     |
+| JS responsiveness | JS waits until the operation finishes                     | JS can run other work while native I/O is in progress                |
+
+### When synchronous calls can be faster
+
+For a few small operations, such as checking whether a file exists, reading its
+size, creating a directory, or reading and writing a tiny configuration file,
+thread scheduling can cost more than the file operation itself. The `Sync`
+variants skip that scheduling and Promise overhead, so they can finish sooner.
+Sync-only file access also does not start worker threads; workers start when
+the first asynchronous file task is submitted.
+
+For example, a small local settings file can be created and read synchronously:
+
+```typescript
+import { Directory, File, FS } from 'react-native-io';
+
+const settingsDir = new Directory(FS.joinPaths(FS.documentDir, 'settings'));
+settingsDir.createSync();
+
+const settings = new File(FS.joinPaths(settingsDir.path, 'preferences.json'));
+settings.writeStringSync(JSON.stringify({ theme: 'dark' }));
+
+console.log(settings.existsSync());
+console.log(settings.sizeSync());
+console.log(settings.readStringSync());
+```
+
+The corresponding asynchronous calls use the same paths and data:
+
+```typescript
+await settingsDir.create();
+await settings.writeString(JSON.stringify({ theme: 'dark' }));
+
+console.log(await settings.exists());
+console.log(await settings.size());
+console.log(await settings.readString());
+```
+
+### When to use asynchronous calls
+
+Use asynchronous APIs for large reads and writes, file copies, hashing large
+files, directory traversal, recursive deletion, and batches. They keep the JS
+thread available while the native work runs.
+
+Choose based on the total time spent blocking JS. A few quick synchronous calls
+can be a good fit for small setup tasks; thousands of those calls in a loop can
+still delay rendering and input. A busy disk or a cold cache can also make a
+small operation take longer, so synchronous calls are not guaranteed to be faster.
 
 ## Paths, storage, and encoding
 
@@ -408,6 +476,7 @@ Asynchronous methods generally have no suffix. Synchronous methods end in `Sync`
 - Asynchronous file operations use bounded native worker pools.
 - Standalone `File` and `Directory` objects share one default worker.
 - Android HTTP uses the platform Java networking stack. iOS HTTP uses Foundation networking.
+- HarmonyOS HTTP uses the official Remote Communication Kit C API with system TLS validation.
 - Native buffers and queued asynchronous payloads have explicit safety limits. Calls fail with an error when a limit is exceeded instead of allocating without bounds.
 
 See [Release performance data](example/reports/README.md) for measured results and [example testing](example/TESTING.md) for the test suite.

@@ -35,6 +35,8 @@
 #include "JniHelper.hpp"
 #elif defined(__APPLE__)
 #include "IOSDirectories.hpp"
+#elif defined(RCT_IO_HARMONY)
+#include "HarmonyDirectories.hpp"
 #endif
 
 namespace rct_io {
@@ -76,6 +78,8 @@ private:
                 return JSI_STRING("ios");
             #elif defined(__ANDROID__)
                 return JSI_STRING("android");
+            #elif defined(RCT_IO_HARMONY)
+                return JSI_STRING("harmony");
             #else
                 return JSI_STRING("unknown");
             #endif
@@ -167,6 +171,20 @@ private:
         /** Android SDK version */
         JSI_PROPERTY(sdkVersion, {
             return JSI_NUM(getSdkVersion());
+        })
+
+#elif defined(RCT_IO_HARMONY)
+        JSI_PROPERTY(filesDir, {
+            return JSI_STRING(harmony::filesDir());
+        })
+        JSI_PROPERTY(documentsDir, {
+            return JSI_STRING(harmony::filesDir());
+        })
+        JSI_PROPERTY(cacheDir, {
+            return JSI_STRING(harmony::cacheDir());
+        })
+        JSI_PROPERTY(tempDir, {
+            return JSI_STRING(harmony::tempDir());
         })
 
 #elif defined(__APPLE__)

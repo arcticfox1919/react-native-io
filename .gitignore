@@ -108,3 +108,14 @@ metro-cache/
 # Test reports are runtime artifacts; keep only the human-readable summary.
 /example/reports/*
 !/example/reports/README.md
+
+# HarmonyOS build outputs and synchronized C++ sources.
+harmony/oh_modules/
+harmony/**/oh_modules/
+harmony/.hvigor/
+harmony/**/.hvigor/
+harmony/**/.cxx/
+harmony/**/oh-package-lock.json5
+harmony/**/BuildProfile.ets
+harmony/*.har
+harmony/io/src/main/cpp/io-core/

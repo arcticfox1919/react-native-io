@@ -48,6 +48,7 @@ import {
   type IOPlatform,
   type IOPlatformAndroid,
   type IOPlatformIOS,
+  type IOPlatformHarmony,
   type IORequest,
   type RequestOptions,
   type RequestOptionsWithBody,
@@ -122,6 +123,12 @@ native string conversion.
 These are application-scoped paths. `FS.downloadDir` is not the shared public
 Downloads collection.
 
+On HarmonyOS API 16+, `documentDir` maps to the application `filesDir`,
+`cacheDir` and `tempDir` use their corresponding AbilityKit directories, and
+`downloadDir` is `<filesDir>/Download`. `externalDir` and `externalCacheDir`
+fall back to the private files and cache directories; `bundleDir` is undefined.
+See [HarmonyOS integration](../harmony/README.md) for installation and limits.
+
 ```typescript
 console.log('documents:', FS.documentDir);
 console.log('cache:', FS.cacheDir);
@@ -139,7 +146,7 @@ const platform = FS.getPlatform();
 if (platform.platform === IOPlatformType.Android) {
   console.log(platform.sdkVersion);
   console.log(platform.externalFilesDir);
-} else {
+} else if (platform.platform === IOPlatformType.iOS) {
   console.log(platform.libraryDir);
   console.log(platform.bundleDir);
 }
@@ -148,7 +155,7 @@ if (platform.platform === IOPlatformType.Android) {
 Signature:
 
 ```typescript
-FS.getPlatform<T extends IOPlatformAndroid | IOPlatformIOS = IOPlatform>(): T;
+FS.getPlatform<T extends IOPlatform = IOPlatform>(): T;
 ```
 
 Prefer discriminating on `platform.platform` as shown above. The optional
@@ -267,6 +274,13 @@ Available after narrowing with `IOPlatformType.iOS`:
 | `applicationSupportDir` | Application Support directory   |
 | `bundleDir`             | Read-only application bundle    |
 | `homeDir`               | Application sandbox home        |
+
+### HarmonyOS properties
+
+After narrowing with `IOPlatformType.Harmony`, `IOPlatformHarmony` exposes
+`filesDir`, `documentsDir` (an alias of `filesDir`), `cacheDir`, and `tempDir`.
+These paths come from the native application context rather than a hard-coded
+sandbox location.
 
 ## `openFS()` and `FSContext`
 
@@ -848,7 +862,7 @@ await request.download(url, destination, {
 });
 ```
 
-Without the validator, Android restarts the download. iOS currently restarts
+Without the validator, Android restarts the download. iOS and HarmonyOS restart
 instead of resuming. `onProgress` is present in the public option type but is
 not yet connected to the native transfer implementation; do not rely on it.
 
@@ -917,6 +931,11 @@ console.log(payload.url);
 `onProgress` is declared in `UploadOptions` but is not yet connected to the
 native implementation.
 
+HarmonyOS uses file-backed RCP multipart uploads. If MIME type is omitted, it
+uses `application/octet-stream`. RCP limits the source path and remote filename
+to 127 UTF-8 bytes each and MIME type to 63 bytes; larger values fail explicitly.
+Multipart uploads do not automatically follow redirects on this backend.
+
 ### Explicit `Request` lifetime
 
 The global proxy creates a client for each method call. A custom `Request`
@@ -971,7 +990,7 @@ interface DirectoryEntry {
 
 ### Other enums
 
-- `IOPlatformType`: `iOS`, `Android`
+- `IOPlatformType`: `iOS`, `Android`, `Harmony`
 - `WriteMode`: `Overwrite`, `Append`, `Atomic`, `AtomicDurable`
 - `HashAlgorithm`: all algorithms listed under [Hashing](#hashing)
 - `FileOpenMode`: all modes listed under [Open modes](#open-modes)

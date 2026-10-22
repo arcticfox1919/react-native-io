@@ -12,7 +12,7 @@ import { IOPlatformType } from 'react-native-io';
 describe('Platform API', () => {
   describe('Platform detection', () => {
     it('should detect correct platform', () => {
-      expect(Platform.OS).toMatch(/ios|android/);
+      expect(Platform.OS).toMatch(/ios|android|harmony/);
     });
 
     it('should have platform version', () => {
@@ -27,6 +27,10 @@ describe('Platform API', () => {
 
     it('should have Android type', () => {
       expect(IOPlatformType.Android).toBeDefined();
+    });
+
+    it('should have HarmonyOS type', () => {
+      expect(IOPlatformType.Harmony).toBe('harmony');
     });
   });
 });
