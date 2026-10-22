@@ -29,6 +29,15 @@ inline void validateSignature(facebook::jsi::Runtime& rt, std::string_view metho
         break;
       }
       case 'B': if (!arg.isBool()) fail(i); break;
+      case 'U': {
+        // Decode and bounds-check binary inputs once, in the consumer before
+        // any I/O or task submission. Reject arrays here to keep the generic
+        // async extractor from treating an invalid byte input as string args.
+        if (!arg.isObject()) fail(i);
+        auto object = arg.asObject(rt);
+        if (!object.isArrayBuffer(rt) && object.isArray(rt)) fail(i);
+        break;
+      }
       case 'D':
         if (arg.isNull() || arg.isUndefined() || arg.isString()) break;
         [[fallthrough]];
@@ -74,8 +83,8 @@ inline void validateFSArguments(facebook::jsi::Runtime& rt, std::string name,
     {"openFile","Po"}, {"fileClose","H"}, {"fileCloseAsync","H"}, {"fileSeek","HNr"},
     {"fileRewind","H"}, {"fileGetPosition","H"}, {"fileGetSize","H"}, {"fileIsEOF","H"},
     {"fileFlush","H"}, {"fileTruncate","H"}, {"fileRead","Hz"}, {"fileReadString","Hz"},
-    {"fileReadLine","H"}, {"fileWrite","HA"}, {"fileWriteString","HS"}, {"fileWriteLine","HS"},
-    {"writeString","PSmb"}, {"writeBytes","PAmb"}, {"copyFile","PPb"},
+    {"fileReadLine","H"}, {"fileWrite","HU"}, {"fileWriteString","HS"}, {"fileWriteLine","HS"},
+    {"writeString","PSmb"}, {"writeBytes","PUmb"}, {"copyFile","PPb"},
     {"moveFile","PP"}, {"moveDirectory","PP"}, {"createFile","Pb"},
     {"createDirectory","Pb"}, {"deleteDirectory","Pb"}, {"listDirectory","Pb"}, {"calcHash","Pk"}
   };

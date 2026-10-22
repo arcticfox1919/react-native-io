@@ -117,7 +117,7 @@ Binary methods accept and return `ArrayBuffer` values:
 
 ```typescript
 const file = new File(FS.joinPaths(FS.cacheDir, 'data.bin'));
-const input = new Uint8Array([0, 1, 2, 255]).buffer;
+const input = new Uint8Array([0, 1, 2, 255]);
 
 await file.writeBytes(input);
 

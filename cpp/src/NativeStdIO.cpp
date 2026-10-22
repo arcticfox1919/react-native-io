@@ -3,6 +3,7 @@
 #include "FSHostObject.hpp"
 #include "IORequestHostObject.hpp"
 #include "PlatformHostObject.hpp"
+#include "JSIEncoding.hpp"
 
 #include <string>
 
@@ -68,7 +69,7 @@ jsi::String NativeStdIO::decodeString(jsi::Runtime &rt, jsi::Object buffer, jsi:
   if (encodingStr == "ascii" && std::any_of(data, data + size, [](unsigned char c) { return c > 127; }))
     throw jsi::JSError(rt, "ASCII decoding requires 7-bit input");
   if (encodingStr == "utf8") {
-    return jsi::String::createFromUtf8(rt, std::string(data, size));
+    return jsi::String::createFromUtf8(rt, reinterpret_cast<const uint8_t*>(data), size);
   } else if (encodingStr == "ascii") {
     return jsi::String::createFromAscii(rt, data, size);
   } else if (encodingStr == "latin1") {
@@ -95,19 +96,27 @@ jsi::Object NativeStdIO::encodeString(jsi::Runtime &rt, jsi::String str, jsi::St
   std::string encodingStr = encoding.utf8(rt);
 
   if (encodingStr == "utf8" || encodingStr == "ascii") {
+    if (jsi_utils::runtimeState(rt)->nativeStringData) {
+      if (auto bytes = jsi_utils::tryEncodeAscii(rt, str))
+        return jsi_utils::toArrayBuffer(rt, std::move(*bytes));
+      if (encodingStr == "ascii") throw jsi::JSError(rt, "ASCII encoding requires 7-bit input");
+    }
     // UTF-8 and ASCII share the same byte representation for 0x00-0x7F
     std::string input = str.utf8(rt);
     if (encodingStr == "ascii" && std::any_of(input.begin(), input.end(), [](unsigned char c) { return c > 127; }))
       throw jsi::JSError(rt, "ASCII encoding requires 7-bit input");
     rct_io::checkBufferSize(input.size());
-    auto buffer = jsi_utils::toArrayBuffer(rt, std::vector<uint8_t>(input.begin(), input.end()));
-    return std::move(buffer);
+    return jsi_utils::toArrayBuffer(rt, std::move(input));
   } else if (encodingStr == "latin1") {
     // Latin1: decode UTF-8 to code points, keep 0x00-0xFF
     std::string input = str.utf8(rt);
     rct_io::checkBufferSize(input.size());
-    std::string result;
-    result.reserve(input.size());
+    std::vector<uint8_t> result;
+    // Engine-produced UTF-8 has one leading byte per code point. Reserve the
+    // exact output size, rather than retaining the larger UTF-8 allocation.
+    result.reserve(std::count_if(input.begin(), input.end(), [](unsigned char c) {
+      return (c & 0xC0) != 0x80;
+    }));
     for (size_t i = 0; i < input.size(); ) {
       unsigned char c = static_cast<unsigned char>(input[i]);
       uint32_t codePoint;
@@ -128,11 +137,10 @@ jsi::Object NativeStdIO::encodeString(jsi::Runtime &rt, jsi::String str, jsi::St
         ++i;
         continue;
       }
-      result.push_back(codePoint <= 0xFF ? static_cast<char>(codePoint) : '?');
+      result.push_back(codePoint <= 0xFF ? static_cast<uint8_t>(codePoint) : '?');
     }
     rct_io::checkBufferSize(result.size());
-    auto buffer = jsi_utils::toArrayBuffer(rt, std::vector<uint8_t>(result.begin(), result.end()));
-    return std::move(buffer);
+    return jsi_utils::toArrayBuffer(rt, std::move(result));
   }
 
   throw jsi::JSError(rt, "Unsupported encoding: " + encodingStr);

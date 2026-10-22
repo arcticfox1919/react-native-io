@@ -30,6 +30,7 @@
 #include <unordered_map>
 #include <functional>
 #include <cstdint>
+#include <span>
 
 namespace rct_io::network {
 
@@ -89,11 +90,16 @@ struct HttpRequestConfig {
     int32_t timeoutMs = 30000;
     bool followRedirects = true;
 
+    // Borrows config-owned bytes for the duration of request dispatch.
+    // Platform adapters must copy if their transport retains data afterwards.
+    [[nodiscard]] std::span<const uint8_t> getBodyView() const {
+        if (!body.empty()) return body;
+        return {reinterpret_cast<const uint8_t*>(bodyString.data()), bodyString.size()};
+    }
+
     [[nodiscard]] std::vector<uint8_t> getBodyBytes() const {
-        if (!body.empty()) {
-            return body;
-        }
-        return std::vector<uint8_t>(bodyString.begin(), bodyString.end());
+        const auto bytes = getBodyView();
+        return {bytes.begin(), bytes.end()};
     }
 
     [[nodiscard]] bool hasBody() const {

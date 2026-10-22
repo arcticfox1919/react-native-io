@@ -8,6 +8,7 @@
 import {
   HashAlgorithm,
   WriteMode,
+  type BinaryInput,
   type FileMetadata,
   type IOFileSystem,
 } from './types';
@@ -277,7 +278,7 @@ export class File {
    * @param mode Write mode (default: Overwrite)
    */
   writeBytes(
-    data: ArrayBuffer,
+    data: BinaryInput,
     mode: WriteMode = WriteMode.Overwrite
   ): Promise<void> {
     return this.fs().writeBytes(this._path, data, mode, true);
@@ -295,7 +296,7 @@ export class File {
    * Append binary data to file
    * @param data Binary data to append
    */
-  appendBytes(data: ArrayBuffer): Promise<void> {
+  appendBytes(data: BinaryInput): Promise<void> {
     return this.writeBytes(data, WriteMode.Append);
   }
 
@@ -323,7 +324,7 @@ export class File {
    * @warning Blocks JS thread. Prefer `writeBytes()` async version.
    */
   writeBytesSync(
-    data: ArrayBuffer,
+    data: BinaryInput,
     mode: WriteMode = WriteMode.Overwrite
   ): void {
     this.fs().writeBytesSync(this._path, data, mode, true);
@@ -343,7 +344,7 @@ export class File {
    * @param data Binary data to append
    * @warning Blocks JS thread. Prefer `appendBytes()` async version.
    */
-  appendBytesSync(data: ArrayBuffer): void {
+  appendBytesSync(data: BinaryInput): void {
     this.writeBytesSync(data, WriteMode.Append);
   }
 

@@ -87,7 +87,7 @@ def main():
                 assert report["kind"] == "release-common-api-benchmark"
                 assert build == {"type": "release", "debuggable": False, "minified": True, "variant": variant}, build
                 assert report["runId"] == run_id and not report["environment"]["jsDev"]
-                assert len(report["measurements"]) == 7
+                assert len(report["measurements"]) == 14
                 assert all(len(m["rawMs"]) == 30 for m in report["measurements"])
                 after = snapshot()
                 manifest["runs"].append({"pair": pair, "position": position, "variant": variant,

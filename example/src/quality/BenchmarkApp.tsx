@@ -32,7 +32,7 @@ function exactBytes(actual: ArrayBuffer, expected: ArrayBuffer) {
   }
 }
 
-/** Common 0.1.4 APIs only, so the identical harness can run against both libraries. */
+/** Both APKs use this identical harness and ArrayBuffer inputs. */
 export async function runBenchmark(
   options: DeviceLaunchOptions,
   progress: (message: string) => void
@@ -53,15 +53,20 @@ export async function runBenchmark(
   async function measure(
     label: string,
     bytesPerSample: number,
-    action: () => unknown | Promise<unknown>
+    action: () => unknown | Promise<unknown>,
+    synchronous = false
   ) {
     progress(label);
     deviceLog(`[IO_BENCH_PHASE] ${runId} ${label}`);
-    for (let i = 0; i < WARMUP; ++i) await action();
+    for (let i = 0; i < WARMUP; ++i) {
+      if (synchronous) action();
+      else await action();
+    }
     const rawMs: number[] = [];
     for (let i = 0; i < SAMPLES; ++i) {
       const start = performance.now();
-      await action();
+      if (synchronous) action();
+      else await action();
       rawMs.push(performance.now() - start);
     }
     measurements.push({
@@ -95,6 +100,13 @@ export async function runBenchmark(
       (await large.calcHash(HashAlgorithm.SHA256)) === EXPECTED_SHA256,
       'write content mismatch'
     );
+    await measure(
+      'writeBytesSync/16MiB',
+      BYTES,
+      () => large.writeBytesSync(bytes),
+      true
+    );
+    exactBytes(large.readBytesSync(), bytes);
     await measure('readBytes/16MiB', BYTES, async () => {
       check(
         (await large.readBytes()).byteLength === BYTES,
@@ -108,13 +120,79 @@ export async function runBenchmark(
         'hash mismatch'
       );
     });
-    await measure('readBytesSync/16MiB', BYTES, () => {
-      check(
-        large.readBytesSync().byteLength === BYTES,
-        'sync read length mismatch'
-      );
-    });
+    await measure(
+      'readBytesSync/16MiB',
+      BYTES,
+      () => {
+        check(
+          large.readBytesSync().byteLength === BYTES,
+          'sync read length mismatch'
+        );
+      },
+      true
+    );
     exactBytes(large.readBytesSync(), bytes);
+    const textFile = new File(`${root}/text`);
+    const largeText = 'x'.repeat(BYTES);
+    await textFile.writeString(largeText);
+    await measure('readString/16MiB', BYTES, async () => {
+      check((await textFile.readString()).length === BYTES, 'text read length');
+    });
+    check((await textFile.readString()) === largeText, 'text read content');
+    await measure(
+      'readStringSync/16MiB',
+      BYTES,
+      () =>
+        check(textFile.readStringSync().length === BYTES, 'sync text length'),
+      true
+    );
+    check(textFile.readStringSync() === largeText, 'sync text content');
+    await measure(
+      'encodeString/16MiB',
+      BYTES,
+      () =>
+        check(FS.encodeString(largeText).byteLength === BYTES, 'encode size'),
+      true
+    );
+    const encoded = FS.encodeString(largeText);
+    check(FS.decodeString(encoded) === largeText, 'encoded text content');
+    await measure(
+      'decodeString/16MiB',
+      BYTES,
+      () => check(FS.decodeString(encoded).length === BYTES, 'decode length'),
+      true
+    );
+    check(FS.decodeString(encoded) === largeText, 'decoded text content');
+    // Each unit produces ten UTF-8 bytes, including a supplementary character.
+    const unicodeText =
+      'é中😀x'.repeat(Math.floor(BYTES / 10)) + 'x'.repeat(BYTES % 10);
+    await measure(
+      'encodeString-UTF8-Unicode/16MiB',
+      BYTES,
+      () =>
+        check(FS.encodeString(unicodeText).byteLength === BYTES, 'UTF-8 size'),
+      true
+    );
+    check(
+      FS.decodeString(FS.encodeString(unicodeText)) === unicodeText,
+      'Unicode encoding content'
+    );
+    const latin1Text = 'éÿ\u0000A'.repeat(BYTES / 4);
+    await measure(
+      'encodeString-Latin1/16MiB',
+      BYTES,
+      () =>
+        check(
+          FS.encodeString(latin1Text, 'latin1').byteLength === BYTES,
+          'Latin1 size'
+        ),
+      true
+    );
+    const latin1Bytes = new Uint8Array(FS.encodeString(latin1Text, 'latin1'));
+    const latin1Pattern = [233, 255, 0, 65];
+    for (let i = 0; i < latin1Bytes.length; ++i) {
+      check(latin1Bytes[i] === latin1Pattern[i % 4], 'Latin1 encoding content');
+    }
     await measure('writeBytes/4KiB', 4096, () => small.writeBytes(smallBytes));
     exactBytes(await small.readBytes(), smallBytes);
     await measure('readBytes/4KiB', 4096, async () => {
@@ -156,13 +234,16 @@ export async function runBenchmark(
         'JS call through returned Promise/value, includes copies and scheduling',
       correctness:
         'independent SHA-256 fixture; exact byte checks outside timed read loops',
-      syncTiming: 'same await harness adds microtask overhead to sync call',
+      syncTiming: 'direct synchronous call; no await in timed region',
       order:
         'fixed metric order in both APKs; A/B rounds counterbalance process order',
     },
     measurements,
   };
-  const reportDir = `${FS.documentDir}/io-quality`;
+  // Keep Release reports readable by adb without changing documentDir semantics.
+  const reportDir = `${
+    Platform.OS === 'android' ? `${FS.externalDir}/Documents` : FS.documentDir
+  }/io-quality`;
   await new Directory(reportDir).create(true);
   const path = `${reportDir}/benchmark-${
     build?.variant ?? 'unknown'

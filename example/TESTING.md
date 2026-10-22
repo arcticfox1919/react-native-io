@@ -338,6 +338,19 @@ and TSan are separate runs and detect different memory and race classes.
 
 ## 10. Release performance reproduction
 
+For a focused native-core read comparison on macOS, run:
+
+```sh
+bash example/scripts/benchmark-reads.sh
+```
+
+Run this command from the repository root. It compares committed `HEAD` with
+the working tree using C++20 `-O3 -DNDEBUG`, a 32 MiB file, three warmups and
+31 samples per API in ABBA order. It measures whole-file text reads,
+file-handle text reads and binary reads with a warm OS page cache. These are
+native-core measurements; they exclude JSI, worker scheduling and mobile
+storage behavior. Use the device workflow below for app performance claims.
+
 Release/R8 measurements require a physical device and a non-debuggable Release
 APK. The Android app can launch the quality action or common-API benchmark
 action from the same Release bundle; a normal launch opens the interactive UI.
@@ -354,6 +367,35 @@ Reproducible tools are under example/scripts:
 - run-android-release-benchmark.py
 - analyze-release-benchmark.py
 - analyze-http-transport.py
+
+The file benchmark includes synchronous binary writes, synchronous/asynchronous
+binary and text reads, ASCII and non-ASCII UTF-8 encoding, Latin1 encoding,
+UTF-8 decoding, and the existing hash/small-file cases. Both APKs must contain
+the same `BenchmarkApp.tsx`. Encoding datasets produce 16 MiB of output;
+Unicode input includes accented text, CJK and supplementary characters, while
+Latin1 input includes high bytes and NUL. Synchronous samples
+time the direct call without `await`; asynchronous samples include Promise
+completion. Android reports are exported under
+`FS.externalDir/Documents/io-quality` so `adb pull` works for Release builds.
+
+To measure the library's actual Java download and multipart-upload APIs:
+
+```sh
+# Start the fixture on the computer, then forward both ports to the device.
+python3 example/scripts/http_benchmark_server.py
+adb reverse tcp:8876 tcp:8876
+adb reverse tcp:8877 tcp:8877
+adb shell am force-stop io.example
+adb shell am start -W -n io.example/.HttpBenchmarkActivity \
+  --ez productionBenchmark true
+```
+
+Use the current Release/R8 APK. The activity runs four rounds per protocol and
+direction, with two warmups and nine measured transfers per round. It checks
+download hashes and the server's multipart-upload hash. Pull the report from
+`<externalFilesDir>/Documents/io-quality/http-transport-*.json` and summarize it
+with `analyze-http-transport.py`. This measures the Java transport; it excludes
+JSI and JavaScript scheduling.
 
 Use [the release results](reports/README.md) as the measured reference. Do
 not substitute Debug JSON for the Release baseline.

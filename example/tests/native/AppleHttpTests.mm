@@ -15,6 +15,15 @@ int main(int argc,char**argv){
  HttpRequestConfig config;config.url=base+"/redirect";config.timeoutMs=1000;config.followRedirects=false;
  assert(client->request(config).statusCode==302);
  config.followRedirects=true;auto response=client->request(config);assert(response.statusCode==200&&response.body.size()==8);
+ // Exercise the real NSData transport with empty, binary and string-backed bodies.
+ for(size_t size: {size_t(0),size_t(3),size_t(1024*1024+3)}) {
+   HttpRequestConfig echo;echo.url=base+"/echo";echo.method=HttpMethod::POST;echo.timeoutMs=5000;
+   echo.body.resize(size);for(size_t i=0;i<size;++i)echo.body[i]=static_cast<uint8_t>(i%256);
+   auto binary=client->request(echo);assert(binary.success&&binary.body==echo.body);
+   if(size)echo.bodyString.assign(reinterpret_cast<const char*>(echo.body.data()),size);
+   echo.body.clear();auto text=client->request(echo);
+   assert(text.success&&text.body==echo.getBodyBytes());
+ }
  {std::ofstream out(path);out<<"original";}
  DownloadConfig download;download.url=base+"/error";download.destinationPath=path;download.timeoutMs=1000;
  assert(!client->download(download).success);
@@ -28,5 +37,5 @@ int main(int argc,char**argv){
  auto start=std::chrono::steady_clock::now();assert(!client->request(config).success);
  assert(std::chrono::steady_clock::now()-start<std::chrono::seconds(2));
  std::filesystem::remove(path);
- std::cout<<"PASS: Apple redirect policy, failed-download preservation, replacement, streamed multipart, timeout\n";
+ std::cout<<"PASS: Apple binary/text HTTP echo, redirect policy, failed-download preservation, replacement, streamed multipart, timeout\n";
 }

@@ -112,7 +112,8 @@ private:
         return position;
     }
 
-    [[nodiscard]] std::vector<uint8_t> readUnlocked(int64_t size) {
+    template<typename Contents>
+    [[nodiscard]] Contents readUnlocked(int64_t size) {
         ensureOpen();
         if (!canRead()) throw std::runtime_error("File not opened for reading");
         if (size < -1) throw std::invalid_argument("Read size must be -1 or nonnegative");
@@ -122,7 +123,7 @@ private:
         size = size == -1 ? remaining : std::min(size, remaining);
         checkBufferSize(static_cast<size_t>(size));
         if (size == 0) return {};
-        std::vector<uint8_t> buffer(static_cast<size_t>(size));
+        Contents buffer(static_cast<size_t>(size), 0);
         auto bytesRead = std::fread(buffer.data(), 1, buffer.size(), file_);
         if (bytesRead < buffer.size() && std::ferror(file_)) throw std::runtime_error("Read error");
         buffer.resize(bytesRead);
@@ -323,7 +324,7 @@ public:
      */
     [[nodiscard]] auto read(int64_t size = -1) -> std::vector<uint8_t> {
         std::lock_guard<std::mutex> lock(mutex_);
-        return readUnlocked(size);
+        return readUnlocked<std::vector<uint8_t>>(size);
     }
 
     /**
@@ -333,8 +334,7 @@ public:
      */
     [[nodiscard]] auto readString(int64_t size = -1) -> std::string {
         std::lock_guard<std::mutex> lock(mutex_);
-        auto bytes = readUnlocked(size);
-        return std::string(bytes.begin(), bytes.end());
+        return readUnlocked<std::string>(size);
     }
 
     /**

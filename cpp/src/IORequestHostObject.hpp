@@ -18,6 +18,7 @@
 #include <ReactCommon/CallInvoker.h>
 #include <algorithm>
 #include <filesystem>
+#include <string_view>
 
 #ifdef __ANDROID__
 #include "../network/IOHttpClientAndroid.hpp"
@@ -113,10 +114,10 @@ public:
             throw JSError(rt, "Invalid header/form key-value arrays");
     }
     static void validateHeaders(const HttpHeaders& headers) {
+        constexpr std::string_view token = "!#$%&'*+-.^_`|~";
         for (const auto& [key, value] : headers) {
-            const std::string token = "!#$%&'*+-.^_`|~";
             if (!std::all_of(key.begin(), key.end(), [&](unsigned char c) {
-                  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || token.find(static_cast<char>(c)) != std::string::npos;
+                  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || token.find(static_cast<char>(c)) != std::string_view::npos;
                 }) || !std::all_of(value.begin(), value.end(), [](unsigned char c) { return c == '\t' || (c >= 32 && c != 127); }))
                 throw std::invalid_argument("Invalid HTTP header characters");
             if (key.empty() || key.find_first_of("\r\n") != std::string::npos || value.find_first_of("\r\n") != std::string::npos ||
@@ -146,9 +147,9 @@ private:
         AsyncResultMap obj;
         obj.emplace("success", response.success);
         obj.emplace("statusCode", static_cast<double>(response.statusCode));
-        obj.emplace("statusMessage", response.statusMessage);
-        obj.emplace("url", response.url);
-        obj.emplace("errorMessage", response.errorMessage);
+        obj.emplace("statusMessage", std::move(response.statusMessage));
+        obj.emplace("url", std::move(response.url));
+        obj.emplace("errorMessage", std::move(response.errorMessage));
         obj.emplace("body", std::move(response.body));  // vector<uint8_t> -> ArrayBuffer
 
         // Headers as parallel arrays
@@ -169,13 +170,13 @@ private:
     // ========================================================================
     // Helper: Convert DownloadResult to AsyncResult
     // ========================================================================
-    static AsyncResult downloadResultToAsyncResult(const DownloadResult& result) {
+    static AsyncResult downloadResultToAsyncResult(DownloadResult result) {
         AsyncResultMap obj;
         obj.emplace("success", result.success);
         obj.emplace("statusCode", static_cast<double>(result.statusCode));
-        obj.emplace("filePath", result.filePath);
+        obj.emplace("filePath", std::move(result.filePath));
         obj.emplace("fileSize", static_cast<double>(result.fileSize));
-        obj.emplace("errorMessage", result.errorMessage);
+        obj.emplace("errorMessage", std::move(result.errorMessage));
         return AsyncResult(std::move(obj));
     }
 
@@ -187,7 +188,7 @@ private:
         obj.emplace("success", result.success);
         obj.emplace("statusCode", static_cast<double>(result.statusCode));
         obj.emplace("responseBody", std::move(result.responseBody));  // vector<uint8_t> -> ArrayBuffer
-        obj.emplace("errorMessage", result.errorMessage);
+        obj.emplace("errorMessage", std::move(result.errorMessage));
         return AsyncResult(std::move(obj));
     }
 
@@ -229,17 +230,16 @@ private:
 
             // Body from buffer args if present
             if (!jsiBufArgs.empty()) {
-                config.body = jsiBufArgs[0];
+                // The JS-thread snapshot is owned by this task and used once.
+                config.body = std::move(jsiBufArgs[0]);
             }
 
-            // Parse headers: all strings from index 2 are header key-value pairs
-            // If body was string (not buffer), it would be at end - but we use buffer
+            // Header pairs follow URL/method; an optional string body comes last.
             size_t numHeaderStrings = jsiStrArgs.size() - 2;
 
             // If odd count and no buffer, last string is body
             if (numHeaderStrings % 2 == 1 && jsiBufArgs.empty()) {
-                auto bodyStr = jsiStrArgs.back();
-                config.body = std::vector<uint8_t>(bodyStr.begin(), bodyStr.end());
+                config.bodyString = std::move(jsiStrArgs.back());
                 numHeaderStrings--;
             }
 
@@ -271,7 +271,7 @@ private:
 
             validateHeaders(config.headers);
             auto result = client_->download(config);
-            return downloadResultToAsyncResult(result);
+            return downloadResultToAsyncResult(std::move(result));
         })
 
         // ====================================================================

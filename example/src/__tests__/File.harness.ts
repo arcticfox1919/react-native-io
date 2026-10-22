@@ -129,7 +129,7 @@ describe('File', () => {
       const file = fs.file(testBinaryPath);
       const data = new Uint8Array([0x48, 0x65, 0x6c, 0x6c, 0x6f]); // "Hello"
 
-      await file.writeBytes(data.buffer);
+      await file.writeBytes(data);
       expect(await file.exists()).toBe(true);
 
       const buffer = await file.readBytes();

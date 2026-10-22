@@ -57,6 +57,8 @@ public final class HttpBenchmarkActivity extends Activity {
             report.put("timing", "connection, platform HTTP/TLS, transfer and close; no fsync; verification outside timer");
             report.put("cpu", "benchmark worker thread CPU time; excludes fixture/server CPU");
             report.put("rows", rows);
+            boolean productionBenchmark = getIntent().getBooleanExtra("productionBenchmark", false);
+            if (productionBenchmark) report.put("kind", "android-release-production-http-benchmark");
             if (getIntent().getBooleanExtra("productionOnly", false)) {
                 report.put("kind", "android-release-production-http-validation");
                 report.put("checks", validateProduction(source, destination));
@@ -69,7 +71,8 @@ public final class HttpBenchmarkActivity extends Activity {
                     String base = protocol + "://127.0.0.1:" + (protocol.equals("https") ? "8877" : "8876");
                     String[] directions = round % 2 == 0 ? new String[]{"download", "upload"} : new String[]{"upload", "download"};
                     for (String direction : directions) {
-                        List<String> order = new ArrayList<>(Arrays.asList(STRATEGIES));
+                        List<String> order = new ArrayList<>(Arrays.asList(
+                            productionBenchmark ? new String[]{"production"} : STRATEGIES));
                         Collections.shuffle(order, new Random(0x1919 + round));
                         for (String strategy : order) {
                             progress("Release HTTP transport\nRound " + (round + 1) + "/4\n" + protocol + " " + direction + " " + strategy);
@@ -136,6 +139,18 @@ public final class HttpBenchmarkActivity extends Activity {
         StringBuilder text = new StringBuilder(); for (byte b : digest.digest()) text.append(String.format(Locale.US, "%02x", b & 255)); return text.toString();
     }
     private static void transfer(String base, String direction, String strategy, File source, File destination) throws Exception {
+        if (strategy.equals("production")) {
+            if (direction.equals("download")) {
+                IOHttpClient.DownloadResult result = IOHttpClient.download(base + "/payload", destination.toString(), null, null, 10000, false);
+                if (!result.success || result.statusCode != 200 || result.fileSize != BYTES)
+                    throw new IOException("Production download failed: " + result.errorMessage);
+            } else {
+                IOHttpClient.UploadResult result = IOHttpClient.upload(base + "/multipart", source.toString(), "file", "binary.bin", "application/octet-stream", null, null, null, null, 10000);
+                if (!result.success || result.statusCode != 200 || !HASH.equals(new String(result.responseBody, "UTF-8")))
+                    throw new IOException("Production upload failed: " + result.errorMessage);
+            }
+            return;
+        }
         HttpURLConnection connection = (HttpURLConnection)new URL(base + (direction.equals("upload") ? "/upload" : "/payload")).openConnection();
         connection.setConnectTimeout(10000); connection.setReadTimeout(10000); connection.setUseCaches(false);
         connection.setRequestProperty("Accept-Encoding", "identity");

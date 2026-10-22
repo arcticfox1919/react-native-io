@@ -40,6 +40,8 @@
 #include <unordered_map>
 #include <chrono>
 #include <optional>
+#include <span>
+#include <cstdio>
 #include <variant>
 #include <array>
 #include "IOLimits.hpp"
@@ -154,13 +156,7 @@ namespace detail {
 /**
  * @brief Get entity type from filesystem status
  */
-[[nodiscard]] inline auto getEntityType(const fs::path& path) -> EntityType {
-    std::error_code ec;
-    auto status = fs::status(path, ec);
-
-    if (ec || !fs::exists(status)) {
-        return EntityType::NotFound;
-    }
+[[nodiscard]] inline auto getEntityType(fs::file_status status) -> EntityType {
     if (fs::is_regular_file(status)) {
         return EntityType::File;
     }
@@ -194,6 +190,26 @@ inline auto ensureParentDirectory(const fs::path& path) -> void {
  * Designed for mobile platforms (iOS/Android).
  */
 class IOFileSystem {
+    // Read directly into the requested container; text reads do not need an
+    // intermediate byte vector containing a second copy of the entire file.
+    template<typename Contents>
+    [[nodiscard]] static auto readContents(const std::string& path) -> Contents {
+        checkPath(path);
+        std::unique_ptr<FILE, decltype(&std::fclose)> file(std::fopen(path.c_str(), "rb"), &std::fclose);
+        if (!file) throw std::runtime_error("Cannot open file for reading: " + path);
+        if (::fseeko(file.get(), 0, SEEK_END) != 0) throw std::runtime_error("Cannot seek file: " + path);
+        auto end = ::ftello(file.get());
+        if (end < 0) throw std::runtime_error("Cannot determine file size: " + path);
+        checkBufferSize(static_cast<size_t>(end));
+        if (::fseeko(file.get(), 0, SEEK_SET) != 0) throw std::runtime_error("Cannot seek file: " + path);
+        Contents buffer(static_cast<size_t>(end), 0);
+        const auto bytesRead = buffer.empty() ? 0 : std::fread(buffer.data(), 1, buffer.size(), file.get());
+        if (std::ferror(file.get())) throw std::runtime_error("Error reading file: " + path);
+        // A concurrent truncation must not turn the missing tail into zero bytes.
+        buffer.resize(bytesRead);
+        return buffer;
+    }
+
 public:
     IOFileSystem() = default;
     ~IOFileSystem() = default;
@@ -244,7 +260,7 @@ public:
             return metadata;
         }
 
-        metadata.type = detail::getEntityType(path);
+        metadata.type = detail::getEntityType(status);
 
         if (metadata.type == EntityType::File) {
             metadata.size = static_cast<int64_t>(fs::file_size(path, ec));
@@ -290,27 +306,14 @@ public:
      * @brief Read entire file as UTF-8 string
      */
     [[nodiscard]] auto readString(const std::string& path) const -> std::string {
-        auto bytes = readBytes(path);
-        return std::string(bytes.begin(), bytes.end());
+        return readContents<std::string>(path);
     }
 
     /**
      * @brief Read entire file as binary data
      */
     [[nodiscard]] auto readBytes(const std::string& path) const -> std::vector<uint8_t> {
-        checkPath(path);
-        std::ifstream file(path, std::ios::binary | std::ios::ate);
-        if (!file) throw std::runtime_error("Cannot open file for reading: " + path);
-        auto end = file.tellg();
-        if (end < 0) throw std::runtime_error("Cannot determine file size: " + path);
-        checkBufferSize(static_cast<size_t>(end));
-        file.seekg(0);
-        std::vector<uint8_t> buffer(static_cast<size_t>(end));
-        if (!buffer.empty()) file.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
-        if (file.bad()) throw std::runtime_error("Error reading file: " + path);
-        // A concurrent truncation must not turn the missing tail into zero bytes.
-        if (!buffer.empty()) buffer.resize(static_cast<size_t>(file.gcount()));
-        return buffer;
+        return readContents<std::vector<uint8_t>>(path);
     }
 
     // ========================================================================
@@ -364,11 +367,11 @@ public:
     }
 
     /**
-     * @brief Write binary data to file
+     * @brief Write borrowed binary data to file. The view is consumed before return.
      */
     auto writeBytes(
         const std::string& path,
-        const std::vector<uint8_t>& data,
+        std::span<const uint8_t> data,
         WriteMode mode = WriteMode::Overwrite,
         bool createParents = false
     ) -> void {
@@ -396,10 +399,14 @@ public:
             throw std::runtime_error("Cannot open file for writing: " + path);
         }
 
-        file.write(
-            reinterpret_cast<const char*>(data.data()),
-            static_cast<std::streamsize>(data.size())
-        );
+        // Empty ArrayBuffers may expose a null data pointer. Opening the file
+        // still applies overwrite/append semantics, without passing null to write.
+        if (!data.empty()) {
+            file.write(
+                reinterpret_cast<const char*>(data.data()),
+                static_cast<std::streamsize>(data.size())
+            );
+        }
 
         if (!file) {
             throw std::runtime_error("Failed to write bytes to file: " + path);
@@ -540,7 +547,11 @@ public:
             DirectoryEntry dirEntry;
             dirEntry.path = entry.path().string();
             dirEntry.name = entry.path().filename().string();
-            dirEntry.type = detail::getEntityType(entry.path());
+            // Reuse iterator-cached status when available. status() retains the
+            // existing behavior of reporting a symlink target's type.
+            std::error_code typeEc;
+            auto status = entry.status(typeEc);
+            dirEntry.type = typeEc ? EntityType::NotFound : detail::getEntityType(status);
 
             if (dirEntry.type == EntityType::File) {
                 std::error_code sizeEc;

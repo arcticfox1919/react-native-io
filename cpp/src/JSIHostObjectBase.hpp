@@ -277,18 +277,20 @@ public:
      *
      * Parameters:
      *   - strings: All string arguments (in order)
+     *     Task-owned strings may be moved into a single-use consumer.
      *   - numbers: All number arguments (in order)
      *   - bools: All boolean arguments (in order)
      *   - buffers: All ArrayBuffer arguments (as byte vectors)
+     *     Task-owned snapshots may be moved into a single-use consumer.
      *
      * Returns: AsyncResult containing pure C++ data (converted to JS on JS thread)
      * Throws: std::exception on error (will be converted to Promise rejection)
      */
     using AsyncHandler = std::function<AsyncResult(
-        const std::vector<std::string>& strings,
+        std::vector<std::string>& strings,
         const std::vector<double>& numbers,
         const std::vector<bool>& bools,
-        const std::vector<std::vector<uint8_t>>& buffers
+        std::vector<std::vector<uint8_t>>& buffers
     )>;
 
     using PropertyGetter = std::function<Value(Runtime&)>;
@@ -462,16 +464,16 @@ protected:
                 bools.push_back(args[i].asBool());
             } else if (args[i].isObject()) {
                 auto obj = args[i].asObject(rt);
-                if (obj.isArrayBuffer(rt)) {
-                    auto ab = obj.getArrayBuffer(rt);
-                    auto* data = ab.data(rt);
-                    auto size = ab.size(rt);
+                if (obj.isArrayBuffer(rt) || !obj.isArray(rt)) {
+                    auto borrowed = borrowBytes(rt, args[i]);
+                    auto bytes = borrowed.view(rt);
+                    auto size = bytes.size();
                     if (size > rct_io::maxBufferBytes - totalBytes) throw JSError(rt, "I/O arguments exceed buffer limit");
                     budget.add(size);
                     totalBytes += size;
                     buffers.emplace_back();
-                    if (size != 0) buffers.back().assign(data, data + size);
-                } else if (obj.isArray(rt)) {
+                    if (size != 0) buffers.back().assign(bytes.begin(), bytes.end());
+                } else {
                     // Flatten string arrays into strings vector
                     auto arr = obj.asArray(rt);
                     auto len = arr.size(rt);
@@ -807,10 +809,10 @@ public:
 #ifndef JSI_ASYNC_METHOD
 #define JSI_ASYNC_METHOD(NAME, PARAM_COUNT, BODY) \
     registerAsync(#NAME, PARAM_COUNT, [this]( \
-        const std::vector<std::string>& jsiStrArgs, \
+        std::vector<std::string>& jsiStrArgs, \
         const std::vector<double>& jsiNumArgs, \
         const std::vector<bool>& jsiBoolArgs, \
-        const std::vector<std::vector<uint8_t>>& jsiBufArgs \
+        std::vector<std::vector<uint8_t>>& jsiBufArgs \
     ) -> jsi_utils::AsyncResult { \
         (void)jsiStrArgs; (void)jsiNumArgs; (void)jsiBoolArgs; (void)jsiBufArgs; \
         BODY \

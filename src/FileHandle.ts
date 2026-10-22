@@ -6,7 +6,7 @@
  * reopening the file for each read/write.
  */
 
-import type { IOFileSystem } from './types';
+import type { BinaryInput, IOFileSystem } from './types';
 import { FileOpenMode, SeekOrigin } from './types';
 
 /**
@@ -213,7 +213,7 @@ export class FileHandle {
    * @param data Data to write
    * @returns Number of bytes written
    */
-  write(data: ArrayBuffer): Promise<number> {
+  write(data: BinaryInput): Promise<number> {
     this.ensureOpen();
     return this._fs.fileWrite(this._handle, data);
   }

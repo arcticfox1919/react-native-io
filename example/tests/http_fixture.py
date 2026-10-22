@@ -12,7 +12,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         try: self.wfile.write(data)
         except BrokenPipeError: pass
     def do_POST(self):
-        data=self.rfile.read(int(self.headers['Content-Length']))
+        data=self.rfile.read(int(self.headers.get('Content-Length','0')))
+        if self.path == '/echo':
+            self.send_response(200); self.send_header('Content-Length',str(len(data))); self.end_headers()
+            self.wfile.write(data); return
         ok=b'name="caption"' in data and b'hello' in data and b'filedata' in data
         self.send_response(200 if ok else 400); self.send_header('Content-Length','0'); self.end_headers()
 server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler)

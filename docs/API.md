@@ -84,14 +84,28 @@ for small, bounded operations when the result must be available immediately.
 
 ### Binary data
 
-Binary APIs accept and return `ArrayBuffer`:
+File binary writes accept `BinaryInput` (`ArrayBuffer | Uint8Array`). Reads
+continue to return `ArrayBuffer`:
 
 ```typescript
 const input = new Uint8Array([0, 1, 2, 255]);
-await file.writeBytes(input.buffer);
+await file.writeBytes(input);
+await file.writeBytes(input.subarray(1, 3)); // Writes only [1, 2].
 
 const output = new Uint8Array(await file.readBytes());
 ```
+
+The same input types work with `appendBytes()`, their synchronous variants,
+`FileHandle.write()`, and the underlying file-system write methods. A
+`Uint8Array` writes only its actual view range, including empty views. Other
+typed arrays, `DataView`, plain arrays, and `SharedArrayBuffer`-backed views are
+not accepted. HTTP bodies and string encoding helpers still accept `ArrayBuffer`.
+
+`writeBytesSync()` borrows the selected range until the call returns, without
+allocating a separate full-size native copy. It still blocks the JavaScript
+thread during file I/O. `writeBytes()` copies the input into native-owned memory
+before queuing the operation, so later JavaScript mutations cannot change the
+pending write. Neither API guarantees operating-system zero-copy I/O.
 
 ### Paths
 
@@ -644,7 +658,7 @@ for bounded processing of large files. Handles are created by `FSContext.open()`
 | `read(size?)`                  | Reads bytes; omitted size reads the remainder                 |
 | `readString(size?)`            | Reads UTF-8 text; omitted size reads the remainder            |
 | `readLine()`                   | Reads one line without the newline                            |
-| `write(data)`                  | Writes an `ArrayBuffer` and resolves to bytes written         |
+| `write(data)`                  | Writes `BinaryInput` and resolves to bytes written            |
 | `writeString(content)`         | Writes text and resolves to bytes written                     |
 | `writeLine(line)`              | Writes text plus a newline and resolves to bytes written      |
 | `flush()`                      | Flushes buffered data                                         |

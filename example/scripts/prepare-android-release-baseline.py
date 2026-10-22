@@ -40,7 +40,7 @@ def main():
         count += 1
     shutil.rmtree(base / "example")
     shutil.copytree(root / "example", base / "example", ignore=shutil.ignore_patterns(
-        "node_modules", "build", ".cxx", ".gradle", "ios", "reports", "__pycache__"))
+        "node_modules", "build", ".cxx", ".gradle", "ios", "harmony", "reports", "__pycache__"))
     (base / "node_modules").symlink_to(root / "node_modules", target_is_directory=True)
     (base / "example/node_modules").symlink_to(root / "example/node_modules", target_is_directory=True)
     # Original release integration lacks keep rules for JNI string-based lookups.

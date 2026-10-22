@@ -87,14 +87,88 @@ export function makeCases(networkURL?: string): Case[] {
       name: 'UTF-8, embedded NUL content and native encoding',
       group: 'functional',
       async run(c) {
-        for (const text of ['', 'ASCII', '中文😀é\u0000\r\n']) {
+        for (const text of [
+          '',
+          'ASCII',
+          '中文😀é\u0000\r\n',
+          'a'.repeat(15),
+          'b'.repeat(16),
+          'c'.repeat(17),
+          '中文\u0000😀'.repeat(65537),
+        ]) {
           const f = c.fs.file(`${c.root}/text`);
           await f.writeString(text);
           check((await f.readString()) === text, 'UTF-8 round trip');
+          check(f.readStringSync() === text, 'sync UTF-8 round trip');
           check(
             FS.decodeString(FS.encodeString(text)) === text,
             'native encode/decode round trip'
           );
+        }
+        const ascii = 'ASCII\u0000\r\n';
+        check(
+          FS.decodeString(FS.encodeString(ascii, 'ascii'), 'ascii') === ascii,
+          'ASCII round trip'
+        );
+        equalBytes(
+          FS.encodeString('éÿĀ😀', 'latin1'),
+          new Uint8Array([233, 255, 63, 63]).buffer
+        );
+        equalBytes(
+          FS.encodeString('\ud800A\udc00'),
+          new Uint8Array([239, 191, 189, 65, 239, 191, 189]).buffer
+        );
+        const latin1Alphabet = Array.from({ length: 256 }, (_, i) =>
+          String.fromCharCode(i)
+        ).join('');
+        equalBytes(
+          FS.encodeString(latin1Alphabet, 'latin1'),
+          Uint8Array.from({ length: 256 }, (_, i) => i).buffer
+        );
+        // Keep outputs alive across later allocations and mutate the returned
+        // bytes. This covers short-string storage and transferred heap storage.
+        for (const encoding of ['utf8', 'latin1'] as const) {
+          const outputs = [0, 1, 15, 16, 17, 22, 23, 24, 25, 4096].map(
+            (length) => {
+              const text = 'é'.repeat(length);
+              return { text, buffer: FS.encodeString(text, encoding) };
+            }
+          );
+          for (const { text, buffer } of outputs) {
+            check(
+              FS.decodeString(buffer, encoding) === text,
+              'retained encoding buffer content'
+            );
+            const view = new Uint8Array(buffer);
+            if (view.length) {
+              view[0] = 65;
+              check(view[0] === 65, 'encoding output must be writable');
+              check(
+                FS.decodeString(FS.encodeString(text, encoding), encoding) ===
+                  text,
+                'output mutation must not affect later encodings'
+              );
+            }
+          }
+        }
+        check(
+          FS.decodeString(
+            new Uint8Array([0, 127, 128, 255]).buffer,
+            'latin1'
+          ) === '\u0000\u007f\u0080ÿ',
+          'Latin1 byte mapping'
+        );
+        for (const invalid of [
+          () => FS.encodeString('é', 'ascii'),
+          () => FS.decodeString(new Uint8Array([128]).buffer, 'ascii'),
+        ]) {
+          let rejected = false;
+          try {
+            invalid();
+          } catch {
+            rejected = true;
+          }
+          check(rejected, 'non-ASCII input must be rejected');
         }
       },
     },
@@ -145,6 +219,16 @@ export function makeCases(networkURL?: string): Case[] {
           await f.writeBytes(bytes);
           equalBytes(await f.readBytes(), bytes);
           f.writeBytesSync(bytes);
+          equalBytes(f.readBytesSync(), bytes);
+          const backing = new Uint8Array(size + 2).fill(238);
+          backing.set(new Uint8Array(bytes), 1);
+          const view = backing.subarray(1, size + 1);
+          const pending = f.writeBytes(view);
+          view.fill(7);
+          await pending;
+          equalBytes(await f.readBytes(), bytes);
+          view.set(new Uint8Array(bytes));
+          f.writeBytesSync(view);
           equalBytes(f.readBytesSync(), bytes);
         }
       },

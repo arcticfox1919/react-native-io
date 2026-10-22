@@ -96,7 +96,7 @@ public:
         const std::string& method,
         const std::vector<std::string>& headerKeys,
         const std::vector<std::string>& headerValues,
-        const std::vector<uint8_t>& body,
+        std::span<const uint8_t> body,
         long timeoutMs,
         bool followRedirects
     );

@@ -18,8 +18,8 @@ def summarize(report):
                 assert len(rows) == report["rounds"]
                 wall = [stats.median(r["wallMs"]) for r in rows]
                 cpu = [stats.median(r["cpuMs"]) for r in rows]
-                cpu_change = [100 * (value / stats.median(baselines[row["round"]]["cpuMs"]) - 1) for row, value in zip(rows, cpu)]
-                wall_change = [100 * (value / stats.median(baselines[row["round"]]["wallMs"]) - 1) for row, value in zip(rows, wall)]
+                cpu_change = [100 * (value / stats.median(baselines[row["round"]]["cpuMs"]) - 1) for row, value in zip(rows, cpu)] if baselines else []
+                wall_change = [100 * (value / stats.median(baselines[row["round"]]["wallMs"]) - 1) for row, value in zip(rows, wall)] if baselines else []
                 output.append({"protocol": protocol, "direction": direction, "strategy": strategy,
                                "wallMedianMs": stats.median(wall), "cpuMedianMs": stats.median(cpu),
                                "roundWallMs": wall, "roundCpuMs": cpu,
@@ -39,8 +39,10 @@ def main():
         args.output.write_text(json.dumps(result, indent=2) + "\n")
     print("protocol direction strategy | wall ms | client-thread CPU ms | paired CPU change range")
     for r in result:
+        changes = r['pairedCpuChangePercent']
+        change_range = f"{min(changes):+.1f}%..{max(changes):+.1f}%" if changes else "n/a (production API only)"
         print(f"{r['protocol']} {r['direction']} {r['strategy']} | {r['wallMedianMs']:.3f} | {r['cpuMedianMs']:.3f} | "
-              f"{min(r['pairedCpuChangePercent']):+.1f}%..{max(r['pairedCpuChangePercent']):+.1f}%")
+              f"{change_range}")
 
 
 if __name__ == "__main__":

@@ -216,7 +216,7 @@ NSMutableURLRequest* IOHttpClientIOS::createRequest(const HttpRequestConfig& con
         }
 
         if (config.hasBody()) {
-            auto bodyBytes = config.getBodyBytes();
+            auto bodyBytes = config.getBodyView();
             request.HTTPBody = [NSData dataWithBytes:bodyBytes.data() length:bodyBytes.size()];
         }
 

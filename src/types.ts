@@ -9,6 +9,9 @@
 // Enums
 // ============================================================================
 
+/** Binary input. Uint8Array writes only its byteOffset/byteLength range. */
+export type BinaryInput = ArrayBuffer | Uint8Array;
+
 /**
  * Platform type identifier
  */
@@ -232,7 +235,7 @@ export interface IOFileSystem {
   fileReadLine(handle: FileHandleId): Promise<string>;
 
   /** Write bytes (async) */
-  fileWrite(handle: FileHandleId, data: ArrayBuffer): Promise<number>;
+  fileWrite(handle: FileHandleId, data: BinaryInput): Promise<number>;
 
   /** Write string (async) */
   fileWriteString(handle: FileHandleId, content: string): Promise<number>;
@@ -313,13 +316,13 @@ export interface IOFileSystem {
    */
   writeBytes(
     path: string,
-    data: ArrayBuffer,
+    data: BinaryInput,
     mode?: WriteMode,
     createParents?: boolean
   ): Promise<void>;
   writeBytesSync(
     path: string,
-    data: ArrayBuffer,
+    data: BinaryInput,
     mode?: WriteMode,
     createParents?: boolean
   ): void;

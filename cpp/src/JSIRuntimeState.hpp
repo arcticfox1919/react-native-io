@@ -25,7 +25,13 @@ struct RuntimeState {
   uint64_t nextPromise = 1;
   std::unique_ptr<Function> arrayBufferConstructor;
   std::unique_ptr<Function> promiseConstructor;
+  std::unique_ptr<Function> typedArrayBufferGetter;
+  std::unique_ptr<Function> typedArrayOffsetGetter;
+  std::unique_ptr<Function> typedArrayLengthGetter;
+  std::unique_ptr<Function> typedArrayTagGetter;
+  Value uint8ArrayTag;
   bool nativeBuffers = true;
+  bool nativeStringData = false;
   uint64_t methodCacheTouches = 0;
   std::unordered_map<uint64_t, std::unique_ptr<PromiseCallbacks>> pending;
   std::unordered_map<uint64_t, HostMethodCache> methods;
@@ -43,6 +49,27 @@ inline std::shared_ptr<RuntimeState> runtimeState(Runtime& rt) {
   auto holder = std::make_shared<RuntimeStateHolder>();
   holder->state->promiseConstructor = std::make_unique<Function>(rt.global().getPropertyAsFunction(rt, "Promise"));
   holder->state->arrayBufferConstructor = std::make_unique<Function>(rt.global().getPropertyAsFunction(rt, "ArrayBuffer"));
+  // The default JSI implementation first converts through UTF-8/UTF-16.
+  // Enable direct string access only when the runtime exposes native ASCII.
+  auto probe = String::createFromAscii(rt, "a");
+  auto inspect = [&](bool ascii, const void*, size_t) { holder->state->nativeStringData = ascii; };
+  probe.getStringData(rt, inspect);
+  // Capture intrinsic accessors once. Reading properties on the input view
+  // would allow overridden getters to supply forged ranges or run user code.
+  auto object = rt.global().getPropertyAsObject(rt, "Object");
+  auto descriptor = object.getPropertyAsFunction(rt, "getOwnPropertyDescriptor");
+  auto prototype = object.getPropertyAsFunction(rt, "getPrototypeOf").call(
+      rt, rt.global().getPropertyAsFunction(rt, "Uint8Array").getPropertyAsObject(rt, "prototype")).asObject(rt);
+  auto getter = [&](const Value& key) {
+    return std::make_unique<Function>(descriptor.call(rt, prototype, key)
+        .asObject(rt).getPropertyAsFunction(rt, "get"));
+  };
+  holder->state->typedArrayBufferGetter = getter(String::createFromAscii(rt, "buffer"));
+  holder->state->typedArrayOffsetGetter = getter(String::createFromAscii(rt, "byteOffset"));
+  holder->state->typedArrayLengthGetter = getter(String::createFromAscii(rt, "byteLength"));
+  holder->state->typedArrayTagGetter = getter(
+      rt.global().getPropertyAsObject(rt, "Symbol").getProperty(rt, "toStringTag"));
+  holder->state->uint8ArrayTag = String::createFromAscii(rt, "Uint8Array");
   rt.global().setProperty(rt, key, Object::createFromHostObject(rt, holder));
   return holder->state;
 }

@@ -91,6 +91,13 @@ Module._load = function (name, ...args) {
   new File('/tmp/b').existsSync();
   new Directory('/tmp/c').existsSync();
   assert.equal(creates - before, 1, 'standalone paths share one worker');
+  const view = new Uint8Array([99, 1, 2, 88]).subarray(1, 3);
+  const binaryFile = new File('/tmp/view');
+  binaryFile.writeBytesSync(view);
+  assert.equal(calls.at(-1)[2], view, 'sync writes forward the view without slicing');
+  await binaryFile.appendBytes(view);
+  assert.equal(calls.at(-1)[2], view, 'append writes preserve the view range');
+  assert.equal(calls.at(-1)[3], 1, 'append mode is preserved');
   let finishClose;
   const closeFS = {
     openFile: () => 7,

@@ -1,6 +1,6 @@
 {
   "name": "react-native-io",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "File, network and hashing APIs for React Native using C++/JSI and platform HTTP backends.",
   "main": "./lib/module/index.js",
   "types": "./lib/typescript/src/index.d.ts",

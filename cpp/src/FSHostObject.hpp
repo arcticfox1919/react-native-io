@@ -445,11 +445,12 @@ private:
         })
 
         JSI_SYNC_METHOD(writeBytesSync, 4, {
-            auto ab = JSI_ARG_BUFFER(1);
-            std::vector<uint8_t> bytes(ab.data(rt), ab.data(rt) + ab.size(rt));
+            auto bytes = borrowBytes(rt, args[1]);
+            // Keep the JSI owner alive and borrow only for this synchronous call.
+            // Never capture this view in an asynchronous task.
             fs_->writeBytes(
                 JSI_ARG_STR(0),
-                bytes,
+                bytes.view(rt),
                 static_cast<WriteMode>(static_cast<int>(JSI_ARG_NUM_OPT(2, 0))),
                 JSI_ARG_BOOL_OPT(3, false)
             );

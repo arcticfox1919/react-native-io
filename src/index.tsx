@@ -49,6 +49,7 @@ export {
   HashAlgorithm,
   FileOpenMode,
   SeekOrigin,
+  type BinaryInput,
   type FileHandleId,
   type FileMetadata,
   type DirectoryEntry,

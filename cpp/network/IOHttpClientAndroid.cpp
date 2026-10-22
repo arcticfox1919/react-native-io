@@ -164,8 +164,8 @@ namespace {
         return arr;
     }
 
-    // Helper: Convert std::vector<uint8_t> to Java byte[]
-    local_ref<JArrayByte> toJByteArray(const std::vector<uint8_t>& vec) {
+    // Copy directly from config-owned bytes into the Java byte[].
+    local_ref<JArrayByte> toJByteArray(std::span<const uint8_t> vec) {
         auto arr = JArrayByte::newArray(vec.size());
         if (!vec.empty()) {
             arr->setRegion(0, vec.size(), reinterpret_cast<const jbyte*>(vec.data()));
@@ -179,7 +179,7 @@ local_ref<JHttpResult> JIOHttpClient::request(
         const std::string& method,
         const std::vector<std::string>& headerKeys,
         const std::vector<std::string>& headerValues,
-        const std::vector<uint8_t>& body,
+        std::span<const uint8_t> body,
         long timeoutMs,
         bool followRedirects) {
 
@@ -312,7 +312,7 @@ HttpResponse IOHttpClientAndroid::request(const HttpRequestConfig& config) {
             httpMethodToString(config.method),
             headerKeys,
             headerValues,
-            config.getBodyBytes(),
+            config.getBodyView(),
             config.timeoutMs,
             config.followRedirects
         );
